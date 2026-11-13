@@ -4,7 +4,9 @@ import type { CampaignState, BuildingDef } from "./campaign/types.js";
 import type { CharacterCreationInput, LevelUpChoices } from "./rules/character.js";
 import type { DmMode } from "./campaign/adventure.js";
 
-export interface UserInfo { id: string; name: string; isAdmin: boolean; email?: string; altEmails?: string[] }
+export interface UserInfo { id: string; name: string; isAdmin: boolean; email?: string; altEmails?: string[]; revoked?: boolean }
+
+export interface AccessListView { configured: boolean; policyName?: string; emails: string[]; unlinked: string[]; error?: string }
 
 export type AuthConfig =
   | { mode: "invite" }

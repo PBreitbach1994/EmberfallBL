@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AdminOverview } from "@tavern/engine";
+import type { AccessListView, AdminOverview } from "@tavern/engine";
 import { CLASSES, SPECIES } from "@tavern/engine";
 import type { AppCtx } from "../App";
 import { api, attempt, toast } from "../api";
@@ -11,9 +11,12 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
   const [data, setData] = useState<AdminOverview | null>(null);
   const [tab, setTab] = useState<"players" | "characters" | "adventures">("players");
   const [filter, setFilter] = useState("");
+  const [access, setAccess] = useState<AccessListView | null>(null);
   const load = useCallback(async () => {
     const r = await attempt(() => api<AdminOverview>("/admin/overview"));
     if (r) setData(r);
+    const a = await attempt(() => api<AccessListView>("/admin/access"));
+    if (a) setAccess(a);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -40,17 +43,26 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
         <input placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </section>
 
+      {tab === "players" && <InvitePanel access={access} onInvite={(email, name) => post("/admin/invite", { email, name })} onRemoveEmail={(email) => { if (confirm(`Remove ${email} from the Cloudflare guest list?`)) post("/admin/access/remove-email", { email }); }} />}
+
       {tab === "players" && (
         <section className="panel">
           <p className="muted">Link each player's sign-in email so they land on their existing account when they sign in. If someone made a second account by accident, merge it into the right one — characters and adventures move with it.</p>
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Name</th><th>Sign-in email</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
+              <thead><tr><th>Name</th><th>Sign-in email</th><th>Access</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
               <tbody>
                 {data.users.filter((u) => !f || u.name.toLowerCase().includes(f) || (u.email ?? "").includes(f)).map((u) => (
                   <tr key={u.id}>
                     <td><strong>{u.name}</strong>{u.id === ctx.user.id && <> <Pill>you</Pill></>}</td>
                     <td><EmailCell email={u.email} onSave={(email) => post(`/admin/users/${u.id}`, { email })} />{u.altEmails?.length ? <div className="small muted">also: {u.altEmails.join(", ")}</div> : null}</td>
+                    <td>
+                      {u.revoked ? <Pill kind="bad">removed</Pill> : access?.configured && u.email && !access.error ? (access.emails.includes(u.email) ? <Pill>on guest list</Pill> : <Pill kind="warn">not on list</Pill>) : null}
+                      {u.id !== ctx.user.id && (u.revoked
+                        ? <button className="linkbtn" onClick={() => post(`/admin/users/${u.id}/access`, { grant: true })}>Restore</button>
+                        : <button className="linkbtn" onClick={() => { if (confirm(`Remove ${u.name}'s access? Their characters are kept and you can restore them later.`)) post(`/admin/users/${u.id}/access`, { grant: false }); }}>Remove</button>)}
+                      {!u.revoked && u.email && access?.configured && !access.error && !access.emails.includes(u.email) && <button className="linkbtn" onClick={() => post(`/admin/users/${u.id}/access`, { grant: true })}>Add to list</button>}
+                    </td>
                     <td>{u.characters}</td>
                     <td className="small">{when(u.lastSeen)}</td>
                     <td><input type="checkbox" checked={u.isAdmin} onChange={(e) => post(`/admin/users/${u.id}`, { isAdmin: e.target.checked })} /></td>
@@ -135,5 +147,32 @@ function EmailCell({ email, onSave }: { email?: string; onSave: (email: string |
       <input type="email" placeholder="not linked" value={v} onChange={(e) => setV(e.target.value)} style={{ minWidth: 180 }} />
       {dirty && <button onClick={() => onSave(v.trim() ? v.trim() : null)}>Save</button>}
     </span>
+  );
+}
+
+function InvitePanel({ access, onInvite, onRemoveEmail }: { access: AccessListView | null; onInvite: (email: string, name: string) => void; onRemoveEmail: (email: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  return (
+    <section className="panel">
+      <h2>Invite a player</h2>
+      <form className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "flex-end" }} onSubmit={(e) => { e.preventDefault(); if (email.trim()) { onInvite(email.trim(), name.trim()); setEmail(""); setName(""); } }}>
+        <label>Email<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="friend@example.com" /></label>
+        <label>Name in the tavern (optional)<input value={name} onChange={(e) => setName(e.target.value)} maxLength={32} placeholder="defaults to the email name" /></label>
+        <button className="primary">Invite</button>
+      </form>
+      <p className="small muted">
+        {!access ? "Checking the Cloudflare guest list…"
+          : !access.configured ? "Cloudflare sync isn't set up: invites create the player here, but you'll also need to add their email to the Access policy in Cloudflare. (Set CF_API_TOKEN and CF_ACCOUNT_ID to automate this.)"
+          : access.error ? `Cloudflare guest list unavailable: ${access.error}`
+          : `Invites are added to the Cloudflare policy “${access.policyName}” automatically (${access.emails.length} email${access.emails.length === 1 ? "" : "s"} on it).`}
+      </p>
+      {access?.unlinked?.length ? (
+        <div className="small">
+          On the guest list but not linked to a player (they'll be asked to pick a name or claim an account on first visit):
+          <ul className="roster">{access.unlinked.map((e) => <li key={e}>{e} <button className="linkbtn" onClick={() => onRemoveEmail(e)}>Remove from list</button></li>)}</ul>
+        </div>
+      ) : null}
+    </section>
   );
 }

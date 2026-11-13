@@ -18,6 +18,8 @@ export interface UserRecord {
   /** additional Google emails that sign in to this same account (e.g. after merging accounts) */
   altEmails?: string[];
   lastSeen?: number;
+  /** access removed by the campaign owner (kept so characters survive; re-invite restores it) */
+  revoked?: boolean;
 }
 
 type Kind = "user" | "character" | "campaign" | "adventure" | "meta";

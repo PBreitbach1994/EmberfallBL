@@ -10,6 +10,7 @@ import { Store, newId, newToken, type UserRecord } from "./store.js";
 import { Game, HttpError } from "./game.js";
 import { Town } from "./town.js";
 import { aiAvailable } from "./dm.js";
+import { AccessPolicySync } from "./cloudflare.js";
 import { accessConfigFromEnv, accessTokenFrom, adminEmails, verifyAccessJwt } from "./auth.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -29,7 +30,8 @@ type AuthedRequest = Request & { user: UserRecord; accessEmail?: string };
 
 const ACCESS = accessConfigFromEnv();
 const ALLOW_INVITE_LOGIN = !ACCESS || process.env.ALLOW_INVITE_LOGIN === "true";
-const publicUser = (u: UserRecord) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin, email: u.email, altEmails: u.altEmails });
+const publicUser = (u: UserRecord) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin, email: u.email, altEmails: u.altEmails, revoked: !!u.revoked });
+const accessList = new AccessPolicySync();
 
 /** Resolve the caller. In Access mode the verified Cloudflare identity wins; tokens are only a fallback
  *  when invite login is explicitly allowed (e.g. LAN access while Cloudflare is down). */
@@ -50,6 +52,7 @@ async function auth(req: Request, _res: Response, next: NextFunction) {
       if (r.email) return next(new HttpError(409, "Finish setting up your account."));
       return next(new HttpError(401, ACCESS ? "Please sign in." : "Please sign in."));
     }
+    if (r.user.revoked) return next(new HttpError(403, "Your access to this tavern has been removed. Ask the campaign owner."));
     (req as AuthedRequest).user = r.user;
     if (!r.user.lastSeen || Date.now() - r.user.lastSeen > 5 * 60_000) { r.user.lastSeen = Date.now(); store.saveUser(r.user); }
     next();
@@ -75,6 +78,7 @@ app.get("/api/auth/config", wrap(async (req) => {
     if (owners.length === 1) { user = owners[0]; user.email = id.email; }
   }
   if (!user) return { mode: "access", signedIn: true, email: id.email, needsProfile: true, suggestedName: id.name ?? id.email.split("@")[0] };
+  if (user.revoked) throw new HttpError(403, "Your access to this tavern has been removed. Ask the campaign owner.");
   if (!user.token) user.token = newToken();
   if (adminEmails().includes(id.email)) user.isAdmin = true;
   user.lastSeen = Date.now();
@@ -157,8 +161,9 @@ app.get("/api/admin/overview", wrap((req) => {
   };
 }));
 
-app.post("/api/admin/users/:id", wrap((req) => {
+app.post("/api/admin/users/:id", wrap(async (req) => {
   requireAdmin(req);
+  let note = "";
   const u = store.users.get(req.params.id);
   if (!u) throw new HttpError(404, "No such player.");
   const b = req.body ?? {};
@@ -168,6 +173,10 @@ app.post("/api/admin/users/:id", wrap((req) => {
     const other = email ? store.userByEmail(email) : undefined;
     if (other && other.id !== u.id) throw new HttpError(400, `${email} is already linked to ${other.name}. Merge the accounts instead.`);
     u.email = email;
+    if (email && accessList.configured) {
+      try { if (await accessList.add(email)) note = ` ${email} was added to the Cloudflare guest list.`; }
+      catch (e) { note = ` (Couldn't update Cloudflare: ${(e as Error).message})`; }
+    }
   }
   if (typeof b.name === "string" && b.name.trim()) u.name = b.name.trim().slice(0, 32);
   if (typeof b.isAdmin === "boolean") {
@@ -175,7 +184,79 @@ app.post("/api/admin/users/:id", wrap((req) => {
     u.isAdmin = b.isAdmin;
   }
   store.saveUser(u);
-  return { user: publicUser(u) };
+  return { user: publicUser(u), message: note ? `Saved.${note}` : undefined };
+}));
+
+// ---- guest list (Cloudflare Access policy) management
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const emailsOfUser = (u: UserRecord) => [u.email, ...(u.altEmails ?? [])].filter((e): e is string => !!e);
+
+app.get("/api/admin/access", wrap(async (req) => {
+  requireAdmin(req);
+  const st = await accessList.status();
+  const linked = new Set([...store.users.values()].flatMap(emailsOfUser));
+  return { ...st, unlinked: st.emails.filter((e) => !linked.has(e)) };
+}));
+
+/** Invite a player by email: creates (or re-enables) their player and adds them to the Cloudflare guest list. */
+app.post("/api/admin/invite", wrap(async (req) => {
+  requireAdmin(req);
+  const email = String(req.body?.email ?? "").trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) throw new HttpError(400, "Enter a valid email address.");
+  let user = store.userByEmail(email);
+  let created = false;
+  if (!user) {
+    let name = String(req.body?.name ?? "").trim().slice(0, 32) || email.split("@")[0];
+    const taken = (n: string) => [...store.users.values()].some((u) => u.name.toLowerCase() === n.toLowerCase());
+    if (taken(name)) {
+      if (req.body?.name) throw new HttpError(400, `There's already a player called ${name}. Link the email to them in the table instead, or pick another name.`);
+      let i = 2; while (taken(`${name}${i}`)) i++; name = `${name}${i}`;
+    }
+    user = { id: newId("usr"), name, token: "", isAdmin: false, createdAt: Date.now(), prestigePerks: [], email };
+    created = true;
+  }
+  user.revoked = false;
+  store.saveUser(user);
+  let cf = "";
+  if (accessList.configured) {
+    try { cf = (await accessList.add(email)) ? " and added to the Cloudflare guest list" : " (already on the Cloudflare guest list)"; }
+    catch (e) { cf = `, but Cloudflare couldn't be updated: ${(e as Error).message}. Add the email to the Access policy by hand.`; }
+  } else cf = ". Cloudflare sync isn't set up, so also add this email to the Access policy by hand";
+  return { ok: true, message: `${user.name} (${email}) ${created ? "invited" : "re-enabled"}${cf}.` };
+}));
+
+/** Grant or remove a player's access. Removing keeps their characters; re-granting restores everything. */
+app.post("/api/admin/users/:id/access", wrap(async (req) => {
+  requireAdmin(req);
+  const u = store.users.get(req.params.id);
+  if (!u) throw new HttpError(404, "No such player.");
+  const grant = !!req.body?.grant;
+  const emails = emailsOfUser(u);
+  if (!grant) {
+    if (u.id === req.user.id) throw new HttpError(400, "You can't remove your own access.");
+    if (emails.some((e) => adminEmails().includes(e))) throw new HttpError(400, "That email is listed in ADMIN_EMAILS.");
+  }
+  u.revoked = !grant;
+  store.saveUser(u);
+  const notes: string[] = [];
+  if (accessList.configured) {
+    for (const e of emails) {
+      try { if (grant ? await accessList.add(e) : await accessList.remove(e)) notes.push(e); }
+      catch (err) { notes.push(`${e} (Cloudflare error: ${(err as Error).message})`); }
+    }
+  }
+  const cf = !accessList.configured ? " Cloudflare sync isn't set up — update the Access policy by hand." : notes.length ? ` Cloudflare guest list updated: ${notes.join(", ")}.` : "";
+  return { ok: true, message: `${u.name} ${grant ? "can enter the tavern again" : "can no longer enter the tavern (characters are kept)"}.${cf}` };
+}));
+
+/** Remove an email from the Cloudflare guest list that isn't linked to any player. */
+app.post("/api/admin/access/remove-email", wrap(async (req) => {
+  requireAdmin(req);
+  const email = String(req.body?.email ?? "").trim().toLowerCase();
+  if (!accessList.configured) throw new HttpError(400, "Cloudflare sync isn't set up.");
+  if (adminEmails().includes(email) || emailsOfUser(req.user).includes(email)) throw new HttpError(400, "That would lock you out.");
+  const removed = await accessList.remove(email);
+  return { ok: true, message: removed ? `${email} removed from the Cloudflare guest list.` : `${email} wasn't on the list.` };
 }));
 
 /** Move everything from one player to another (e.g. someone made a second account), then remove the empty one. */
@@ -313,7 +394,7 @@ const clients = new Set<Client>();
 wss.on("connection", async (ws, req) => {
   const token = new URL(req.url ?? "", "http://x").searchParams.get("token") ?? "";
   const { user } = await resolveUser(req.headers, token);
-  if (!user) { ws.close(4001, "unauthorized"); return; }
+  if (!user || user.revoked) { ws.close(4001, "unauthorized"); return; }
   const client: Client = { ws, user };
   clients.add(client);
   ws.on("message", (raw) => {

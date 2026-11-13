@@ -223,6 +223,22 @@ Adding a friend later = add their email to the Access policy. Removing someone =
 In this mode the LAN address (`http://<vm-ip>:3000`) no longer lets anyone in, because there's no Cloudflare identity on it;
 set `ALLOW_INVITE_LOGIN=true` temporarily if you ever need LAN access while Cloudflare is down.
 
+### Invite players from the game (Cloudflare guest-list sync)
+
+Once Access sign-in works, you can let the game edit the Access policy for you: **Admin → Players → Invite a player**
+adds their email to Cloudflare, and **Remove** takes it off (and ends their Cloudflare session; their characters are kept).
+
+1. Cloudflare dashboard → **My Profile → API Tokens → Create Token → Create Custom Token**:
+   - Name: `Emberfall guest list`
+   - Permissions: **Account** → **Access: Apps and Policies** → **Edit**
+   - Account Resources: Include → your account
+   - Create, copy the token (shown once).
+2. Your **Account ID**: dashboard → any domain → **Overview** → right-hand column ("Account ID").
+3. In `.env`: `CF_API_TOKEN=...` and `CF_ACCOUNT_ID=...`, then `./scripts/update.sh`.
+
+The game finds the Access application by `CF_ACCESS_AUD` and manages its Allow policy (the "Players" policy).
+If your app has several Allow policies, set `CF_ACCESS_POLICY_ID` to the one to manage.
+
 ### Optional hardening at Cloudflare
 
 - **SSL/TLS → Edge Certificates:** turn on *Always Use HTTPS*.
