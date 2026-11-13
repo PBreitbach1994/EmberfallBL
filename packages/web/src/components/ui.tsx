@@ -46,7 +46,7 @@ export function classLabel(s: { classId: string; species: string; level: number 
   return `Level ${s.level} ${sp} ${cls}`;
 }
 
-export const CLASS_ICON: Record<string, string> = { fighter: "⚔", rogue: "🗡", cleric: "✚", wizard: "✦", barbarian: "🪓", ranger: "🏹" };
+export const CLASS_ICON: Record<string, string> = { fighter: "⚔", rogue: "🗡", cleric: "✚", wizard: "✦", barbarian: "🪓", ranger: "🏹", paladin: "🛡", monk: "☯", bard: "🎻", druid: "🍃", sorcerer: "🔥", warlock: "👁" };
 
 export function questProgress(sheet: CharacterSheet, goals?: Record<string, number>): string {
   const q = sheet.personalQuest;

@@ -1,0 +1,12 @@
+export function LanternIcon({ size = 30 }: { size?: number }) {
+  return (
+    <svg className="lantern-icon" width={size} height={size} viewBox="-16 -18 32 36" aria-hidden="true">
+      <circle r={13} cy={3} fill="#ff8a33" opacity={0.25} className="lantern-glow" />
+      <path d="M-5 -14 Q0 -19 5 -14 M0 -17 V-13" stroke="#d9b45a" strokeWidth={1.6} fill="none" />
+      <path d="M-8 -12 H8 L10 12 H-10 Z" fill="#3a2a1a" stroke="#d9b45a" strokeWidth={1.4} />
+      <path d="M-6 -9 H6 L7.5 9 H-7.5 Z" fill="#ffc46a" className="lantern-flame" />
+      <path d="M-1 -9 L2 -2 L-1 2 L2 9" stroke="#3a2a1a" strokeWidth={1.3} fill="none" />
+      <path d="M-11 12 H11" stroke="#d9b45a" strokeWidth={2} />
+    </svg>
+  );
+}

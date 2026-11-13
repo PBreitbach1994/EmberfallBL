@@ -3,6 +3,9 @@ import type { AdventureAction, AdventureView, CombatCommand, Combatant, Encounte
 import { SPELLS, areaTiles, current, describeCombatant, dist, hasLineOfSight, reachable, slotsRemaining } from "@tavern/engine";
 import { HpBar, Pill } from "../components/ui";
 import { Log } from "../components/Log";
+import { Board, ELEMENT_COLOR } from "../components/Board";
+import { Emblem } from "../components/art/emblems";
+import { MONSTERS } from "@tavern/engine";
 
 type Mode =
   | { kind: "none" }
@@ -53,6 +56,7 @@ export function Combat({ view, me, act, mapClickOverride }: {
   }, [hover, mode, enc.map, actor.pos]);
 
   const spellTargets = mode.kind === "spell" ? mode.targets : [];
+  const previewColor = mode.kind === "point" ? (mode.breath ? ELEMENT_COLOR.fire : ELEMENT_COLOR[SPELLS[mode.spellId ?? ""]?.damage?.type ?? "default"] ?? ELEMENT_COLOR.default) : undefined;
 
   const clickTile = (p: Point) => {
     if (mapClickOverride) { mapClickOverride(p); return; }
@@ -92,7 +96,7 @@ export function Combat({ view, me, act, mapClickOverride }: {
     }
   };
 
-  const tilePx = Math.max(22, Math.min(40, Math.floor(720 / enc.map.width)));
+  const tilePx = Math.max(24, Math.min(48, Math.floor(760 / enc.map.width)));
   const inspected = inspect ? enc.combatants.find((c) => c.id === inspect) : null;
   const order = enc.order.map((id) => enc.combatants.find((c) => c.id === id)!).filter(Boolean);
 
@@ -105,40 +109,27 @@ export function Combat({ view, me, act, mapClickOverride }: {
       <div className="turnorder">
         {order.map((c) => (
           <button key={c.id} className={`turn ${c.id === actor.id ? "now" : ""} side-${c.side} ${c.dead || c.fled ? "gone" : ""}`} onClick={() => setInspect(c.id)} title={describeCombatant(c)}>
+            <Emblem classId={c.classId} monsterType={c.monsterId ? MONSTERS[c.monsterId]?.type ?? "" : undefined} size={18} />
             <span>{initials(c.name)}</span>
             <HpBar hp={c.hp} max={c.maxHp} small />
           </button>
         ))}
       </div>
       <div className="combat-body">
-        <div className="gridwrap">
-          <div className="grid" style={{ gridTemplateColumns: `repeat(${enc.map.width}, ${tilePx}px)`, gridAutoRows: `${tilePx}px` }} onMouseLeave={() => setHover(null)}>
-            {enc.map.tiles.flatMap((row, y) => row.map((t, x) => {
-              const key = `${x},${y}`;
-              const occ = at({ x, y });
-              const isReach = reach.has(key) && !occ;
-              const inArea = preview.has(key);
-              const targeted = occ && spellTargets.includes(occ.id);
-              const targetable = occ && (mode.kind === "attack" || mode.kind === "spell" || mode.kind === "target") && occ.id !== actor.id && validTarget(enc, actor, occ, mode);
-              return (
-                <div
-                  key={key}
-                  className={`tile ${TILE_CLASS[t] ?? "t-floor"} ${isReach ? "reach" : ""} ${inArea ? "area" : ""} ${targetable ? "targetable" : ""}`}
-                  onClick={() => clickTile({ x, y })}
-                  onMouseEnter={() => setHover({ x, y })}
-                  title={occ ? describeCombatant(occ) : isReach ? `Move here (${reach.get(key)} ft)` : t}
-                >
-                  {occ && (
-                    <div className={`token side-${occ.side} ${occ.id === actor.id ? "active" : ""} ${occ.dead ? "dead" : ""} ${occ.hp <= 0 && !occ.dead ? "down" : ""} ${targeted ? "targeted" : ""}`}>
-                      <span>{initials(occ.name)}</span>
-                      <div className="token-hp"><div style={{ width: `${Math.max(0, (occ.hp / occ.maxHp) * 100)}%` }} /></div>
-                      {targeted && spellTargets.filter((x) => x === occ.id).length > 1 && <em>×{spellTargets.filter((x) => x === occ.id).length}</em>}
-                    </div>
-                  )}
-                </div>
-              );
-            }))}
-          </div>
+        <div className="gridwrap boardwrap">
+          <Board
+            enc={enc}
+            tilePx={tilePx}
+            activeId={actor.id}
+            reach={reach}
+            preview={preview}
+            previewColor={previewColor}
+            isTargetable={(c) => mode.kind !== "none" && mode.kind !== "point" && c.id !== actor.id && !c.dead && validTarget(enc, actor, c, mode)}
+            spellTargets={spellTargets}
+            onTile={clickTile}
+            onHover={setHover}
+            hover={hover}
+          />
           <div className="legend small muted">
             <span><i className="sw t-wall" /> wall</span><span><i className="sw t-diff" /> difficult</span><span><i className="sw t-water" /> water</span>
             <span><i className="sw t-cover" /> cover</span><span><i className="sw t-pit" /> pit</span><span><i className="sw t-door" /> door</span>

@@ -7,6 +7,8 @@ import { Characters } from "./screens/Characters";
 import { CharacterCreate } from "./screens/CharacterCreate";
 import { CharacterSheetView } from "./screens/CharacterSheet";
 import { Adventure } from "./screens/Adventure";
+import { useSound } from "./sound";
+import { LanternIcon } from "./components/art/LanternIcon";
 
 export type Screen =
   | { name: "tavern" }
@@ -34,18 +36,31 @@ function ToastHost() {
   );
 }
 
+function screenFromHash(): Screen {
+  try {
+    const h = location.hash.slice(1);
+    const [n, id] = h.split("/");
+    if (n === "adventure" && id) return { name: "adventure", id };
+    if (n === "sheet" && id) return { name: "sheet", id };
+    if (n === "characters" || n === "create") return { name: n };
+  } catch { /* ignore */ }
+  return { name: "tavern" };
+}
+
+function SoundToggle() {
+  const [on, set] = useSound();
+  return <button className="linkbtn sound-toggle" onClick={() => set(!on)} aria-pressed={on} title="Sound effects">{on ? "🔊" : "🔇"}</button>;
+}
+
 export function App() {
   const [user, setUser] = useState<UserInfo | null>(() => (getToken() ? getStoredUser() : null));
-  const [screen, setScreen] = useState<Screen>(() => {
-    try {
-      const h = location.hash.slice(1);
-      const [n, id] = h.split("/");
-      if (n === "adventure" && id) return { name: "adventure", id };
-      if (n === "sheet" && id) return { name: "sheet", id };
-      if (n === "characters" || n === "create") return { name: n };
-    } catch { /* ignore */ }
-    return { name: "tavern" };
-  });
+  const [screen, setScreen] = useState<Screen>(screenFromHash);
+  // follow back/forward and pasted links
+  useEffect(() => {
+    const on = () => setScreen((cur) => { const n = screenFromHash(); return JSON.stringify(n) === JSON.stringify(cur) ? cur : n; });
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
   const [campaign, setCampaign] = useState<CampaignView | null>(null);
   const [characters, setCharacters] = useState<CharacterSheet[]>([]);
   const [companions, setCompanions] = useState<CharacterSheet[]>([]);
@@ -95,7 +110,7 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand" onClick={() => go({ name: "tavern" })}>
-          <span className="lantern">🏮</span>
+          <LanternIcon />
           <span>
             <strong>{campaign?.world.tavern ?? "The Broken Lantern"}</strong>
             <small>{campaign?.world.name ?? "Emberfall"}</small>
@@ -106,6 +121,7 @@ export function App() {
           {nav({ name: "characters" }, "Characters")}
         </nav>
         <div className="userbox">
+          <SoundToggle />
           <span>{user.name}</span>
           <button className="linkbtn" onClick={() => { storeAuth(null, null); setUser(null); }}>Leave</button>
         </div>
