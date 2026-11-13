@@ -51,4 +51,29 @@ export const PERSONAL_QUESTS: Record<string, PersonalQuest> = {
     goals: { secretsFound: 5 }, unlock: { kind: "prestige", perk: "loremaster" },
     unlockText: "Your journals become the foundation of Emberfall's library, and future heroes of your line start with a lore secret (Prestige perk: Loremaster). The Library can now be built.",
   },
+  // ---- Arc 2: The Frostbound Pass
+  winterBreaker: {
+    id: "winterBreaker", name: "Break the Winter",
+    description: "The cold took your village, your family's flock, or your nerve. You will not see another summer stolen. Complete 5 jobs in the Frostbound Pass.",
+    goals: { frostbound: 5 }, unlock: { kind: "building", buildingId: "watchtower" },
+    unlockText: "You raise a watchtower over the Kettle Road so Emberfall will never again be surprised by the snow. The Watchtower can now be built.",
+  },
+  warmHearth: {
+    id: "warmHearth", name: "A Warm Hearth",
+    description: "Every refugee who walks out of the snow deserves a fire. Donate 200 gold to Emberfall.",
+    goals: { donated: 200 }, unlock: { kind: "prestige", perk: "potion" },
+    unlockText: "The refugees you housed never forget it: future heroes of your line start with an extra Potion of Healing (Prestige perk).",
+  },
+  houndsOath: {
+    id: "houndsOath", name: "The Hounds' Oath",
+    description: "Steel is cheap; trust is not. Win four allies or truces with words instead of blades.",
+    goals: { parley: 4 }, unlock: { kind: "prestige", perk: "gold" },
+    unlockText: "Captain Kade names you a sworn friend of the Grey Hounds; future heroes of your line start with 25 extra gold (Prestige perk).",
+  },
+  rimeHunter: {
+    id: "rimeHunter", name: "Rime Hunter",
+    description: "Wolves that talk, beasts of the high snow, things of living ice. Slay 12 creatures that are neither undead, beast, nor goblinkin.",
+    goals: { killOther: 12 }, unlock: { kind: "building", buildingId: "alchemist" },
+    unlockText: "Your trophies — frost-glands, rime-hearts, winter-wolf bile — set up an alchemist in business. The Copper Still can now be built.",
+  },
 };

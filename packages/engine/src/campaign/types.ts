@@ -18,7 +18,8 @@ export type Effect =
   | { kind: "condition"; condition: "poisoned" | "exhaustion"; who: "all" | "chooser" }
   | { kind: "unlockScenario"; scenarioId: string }
   | { kind: "questCounter"; counter: string; amount: number }   // advances personal quests
-  | { kind: "reputation"; amount: number };
+  | { kind: "reputation"; amount: number }
+  | { kind: "unlockClass"; classId: ClassId };
 
 export interface Outcome {
   text: string;

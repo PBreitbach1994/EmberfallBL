@@ -1,6 +1,9 @@
 // Starter arc: "The Hollow Crown". Original content for the Emberfall Marches.
 // Maps: '#' wall, '.' floor, ':' difficult, '~' water, 'O' pit, '+' door, '%' cover. Coordinates are [x, y].
+import type { ClassId } from "../../types.js";
 import type { Scenario } from "../types.js";
+import { ARC2_SCENARIOS } from "./arc2.js";
+import { SIDE_JOBS } from "./sidejobs.js";
 
 const ARC = "The Hollow Crown";
 
@@ -220,7 +223,7 @@ export const warren: Scenario = {
   arc: ARC,
   mapPosition: [25, 30],
   start: "edge",
-  rewards: { xp: 250, gold: 40, effects: [{ kind: "material", id: "timber", qty: 3 }, { kind: "questCounter", counter: "scenarioDone", amount: 1 }], unlocks: ["hollowKing"] },
+  rewards: { xp: 250, gold: 40, effects: [{ kind: "material", id: "timber", qty: 3 }, { kind: "questCounter", counter: "scenarioDone", amount: 1 }], unlocks: ["hollowKing", "caravan"] },
   nodes: {
     edge: {
       id: "edge",
@@ -402,7 +405,7 @@ export const chapel: Scenario = {
   arc: ARC,
   mapPosition: [72, 25],
   start: "shore",
-  rewards: { xp: 250, gold: 30, effects: [{ kind: "material", id: "herbs", qty: 2 }, { kind: "material", id: "iron", qty: 2 }, { kind: "questCounter", counter: "scenarioDone", amount: 1 }], unlocks: ["hollowKing"] },
+  rewards: { xp: 250, gold: 30, effects: [{ kind: "material", id: "herbs", qty: 2 }, { kind: "material", id: "iron", qty: 2 }, { kind: "questCounter", counter: "scenarioDone", amount: 1 }], unlocks: ["hollowKing", "mill"] },
   nodes: {
     shore: {
       id: "shore",
@@ -586,8 +589,10 @@ export const hollowKing: Scenario = {
       { kind: "flag", flag: "hollowCrownEnded" },
       { kind: "material", id: "iron", qty: 3 }, { kind: "material", id: "timber", qty: 2 }, { kind: "material", id: "relic", qty: 2 },
       { kind: "prosperity", amount: 2 }, { kind: "questCounter", counter: "scenarioDone", amount: 1 },
+      // the fall of the Hollow King draws a holy warrior and a wandering lore-singer to the Broken Lantern
+      { kind: "unlockClass", classId: "paladin" as ClassId }, { kind: "unlockClass", classId: "bard" as ClassId },
     ],
-    unlocks: [],
+    unlocks: ["frostfall"],
   },
   nodes: {
     road: {
@@ -744,4 +749,4 @@ export const hollowKing: Scenario = {
   },
 };
 
-export const SCENARIOS: Record<string, Scenario> = { cellar, warren, chapel, hollowKing };
+export const SCENARIOS: Record<string, Scenario> = { cellar, warren, chapel, hollowKing, ...ARC2_SCENARIOS, ...SIDE_JOBS };

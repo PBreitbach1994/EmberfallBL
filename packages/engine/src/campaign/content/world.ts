@@ -72,6 +72,34 @@ export const WORLD = {
       secrets: ["Was a lady-in-waiting at the Ember Court and has been kept alive by a sliver of the same bargain that binds the Hollow King.", "Knows the words of the bargain but fears speaking them aloud."],
       attitude: "friendly",
     },
+    // ---- Arc 2: The Frostbound Pass
+    {
+      id: "varro-kade",
+      name: "Captain Varro Kade",
+      role: "Captain of the Grey Hounds, a rival mercenary company",
+      personality: "Charming, practical, honest about being for hire. Fiercely loyal to his people; contemptuous of employers who don't pay. Can become a firm friend or a dogged rival.",
+      voice: "Easy southern drawl, calls everyone 'friend', jokes hardest when he's angriest.",
+      secrets: ["His sister lives in Highcairn.", "He's been cheated by Corvin Hask, the Lord-Warden's tax collector, and suspects Hask serves someone colder."],
+      attitude: "indifferent",
+    },
+    {
+      id: "brother-yun",
+      name: "Brother Yun",
+      role: "Monk of the Silent Cairn; teaches the open-hand way in Emberfall's tavern yard",
+      personality: "Serene, gently funny, utterly steady in a crisis. Carries the grief of a monastery frozen around him.",
+      voice: "Slow and warm; answers questions with small questions; never raises his voice.",
+      secrets: ["The Silent Cairn was built to keep watch over Queen Ysmay's tomb — the monks failed.", "Knows a hidden stair into the monastery from the old well-house."],
+      attitude: "friendly",
+    },
+    {
+      id: "ilka-stormborn",
+      name: "Ilka Stormborn",
+      role: "Refugee girl from Highcairn whose draconic sorcery is waking",
+      personality: "Proud, prickly, frightened of her own power and determined never to show it. Fiercely protective of younger refugees.",
+      voice: "Fast and defiant, then suddenly very small. Sparks when upset.",
+      secrets: ["Her grandmother claimed a bronze dragon as an ancestor; it was true."],
+      attitude: "friendly",
+    },
   ] satisfies NpcDef[],
 };
 
@@ -89,4 +117,11 @@ STYLE:
 - Never decide what player characters think, feel, or say.
 - Keep secrets until they are earned. DM notes are for you, not the players.
 - Failure moves the story forward with a cost — never a dead end.
-- The engine resolves all dice, damage, and rules. Describe outcomes; never invent numbers.`;
+- The engine resolves all dice, damage, and rules. Describe outcomes; never invent numbers.
+
+ARC 2 — THE FROSTBOUND PASS (levels 3-5):
+- The Hollow King's bargain had two halves. With Aldric silenced, the other half — Queen Ysmay's bargain with Winter — comes due. Snow falls in high summer. Make the cold a character: breath, numb fingers, sound swallowed by snow, the terrible stillness of people frozen mid-step (they are not dead, only held).
+- The Rime Queen is a tragedy, not a monster: a widow who waited three hundred years for a husband who chose Death over her. Her knights are oath-bound, courtly and sorrowful. Let players feel the pull of mercy as well as the sword.
+- The Grey Hounds are mirrors of the party: mercenaries with their own code. Captain Kade should be likeable even as a rival; the choice to ally or fight matters later.
+- Pell's betrayal should hurt. He has been a friendly face since the first arc. He did it for love (his lost sister), not greed. Let the table argue about his fate.
+- Winter is a pressure, not a punishment. Failure in this arc makes the world colder and harder; it never ends the story.`;

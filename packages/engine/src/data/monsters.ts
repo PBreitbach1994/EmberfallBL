@@ -157,3 +157,71 @@ export const XP_BUDGET: Record<number, [number, number, number]> = {
   1: [50, 75, 100], 2: [100, 150, 200], 3: [150, 225, 400], 4: [250, 375, 500], 5: [500, 750, 1100],
   6: [600, 1000, 1400], 7: [750, 1300, 1700], 8: [1000, 1700, 2100],
 };
+
+// ---------------------------------------------------------------------------------------------
+// Arc 2 ("The Frostbound Pass") and side-job creatures. Winter Wolf, Ice Mephit, Warrior Veteran and
+// Scout are adapted from the SRD 5.2.1; the Rimeback, Rime Knight and the Rime Queen are original.
+Object.assign(MONSTERS, Object.fromEntries([
+  m({ id: "winterWolf", name: "Winter Wolf", size: "large", type: "monstrosity", alignment: "neutral evil", ac: 13, hp: "10d10+20", avgHp: 75, speed: 50,
+    abilities: ab(18, 13, 14, 7, 12, 8), skills: { perception: 5, stealth: 5 }, immunities: ["cold"], senses: "darkvision 60 ft", passivePerception: 15, languages: "Common, Giant, Winter Wolf", cr: 3, xp: 700, initiativeBonus: 1,
+    traits: [{ key: "packTactics", name: "Pack Tactics", description: "Advantage on attack rolls against a creature if an ally is within 5 ft of it." }],
+    actions: [
+      { id: "bite", name: "Bite", kind: "melee", toHit: 6, reach: 5, damage: [{ dice: "2d6", bonus: 4, type: "piercing" }], rider: { condition: "prone", note: "Large or smaller target is knocked Prone." } },
+      { id: "coldBreath", name: "Cold Breath", kind: "save", reach: 15, range: [15, 15], area: { shape: "cone", size: 15 }, save: { ability: "con", dc: 12, half: true }, damage: [{ dice: "4d8", bonus: 0, type: "cold" }], recharge: 5 },
+    ],
+    behavior: "pack" }),
+  m({ id: "iceMephit", name: "Ice Mephit", size: "small", type: "elemental", alignment: "neutral evil", ac: 11, hp: "6d6", avgHp: 21, speed: 30, fly: 30,
+    abilities: ab(7, 13, 10, 9, 11, 12), skills: { perception: 2, stealth: 3 }, vulnerabilities: ["bludgeoning", "fire"], immunities: ["cold", "poison"], conditionImmunities: ["exhaustion", "poisoned"],
+    senses: "darkvision 60 ft", passivePerception: 12, languages: "Primordial (Aquan, Auran)", cr: 0.5, xp: 100, initiativeBonus: 1,
+    traits: [{ key: "deathBurst", name: "Death Burst", description: "When the mephit dies, it explodes in a burst of jagged ice (narrative)." }],
+    actions: [
+      { id: "claw", name: "Claw", kind: "melee", toHit: 3, reach: 5, damage: [{ dice: "1d4", bonus: 1, type: "slashing" }, { dice: "1d4", bonus: 0, type: "cold" }] },
+      { id: "frostBreath", name: "Frost Breath", kind: "save", reach: 15, range: [15, 15], area: { shape: "cone", size: 15 }, save: { ability: "con", dc: 10, half: true }, damage: [{ dice: "2d4", bonus: 0, type: "cold" }], recharge: 6 },
+    ],
+    behavior: "skirmisher" }),
+  m({ id: "warriorVeteran", name: "Warrior Veteran", size: "medium", type: "humanoid", alignment: "neutral", ac: 17, hp: "10d8+20", avgHp: 65, speed: 30,
+    abilities: ab(16, 13, 14, 10, 11, 10), skills: { athletics: 5, perception: 2 }, saves: { str: 5, con: 4 }, passivePerception: 12, languages: "Common", cr: 3, xp: 700, initiativeBonus: 3,
+    actions: [
+      { id: "multiattack", name: "Multiattack", kind: "multiattack", multiattack: ["greatsword", "greatsword"] },
+      { id: "greatsword", name: "Greatsword", kind: "melee", toHit: 5, reach: 5, damage: [{ dice: "2d6", bonus: 3, type: "slashing" }] },
+      { id: "heavyCrossbow", name: "Heavy Crossbow", kind: "ranged", toHit: 3, range: [100, 400], damage: [{ dice: "1d10", bonus: 1, type: "piercing" }] },
+    ],
+    behavior: "brute" }),
+  m({ id: "scout", name: "Scout", size: "medium", type: "humanoid", alignment: "neutral", ac: 13, hp: "3d8+3", avgHp: 16, speed: 30,
+    abilities: ab(11, 14, 12, 11, 13, 11), skills: { nature: 4, perception: 5, stealth: 6, survival: 5 }, passivePerception: 15, languages: "Common", cr: 0.5, xp: 100, initiativeBonus: 2,
+    actions: [
+      { id: "shortsword", name: "Shortsword", kind: "melee", toHit: 4, reach: 5, damage: [{ dice: "1d6", bonus: 2, type: "piercing" }] },
+      { id: "longbow", name: "Longbow", kind: "ranged", toHit: 4, range: [150, 600], damage: [{ dice: "1d8", bonus: 2, type: "piercing" }] },
+    ],
+    behavior: "archer" }),
+  m({ id: "rimeback", name: "Rimeback", size: "large", type: "monstrosity", alignment: "unaligned", ac: 13, hp: "6d10+18", avgHp: 51, speed: 40, climb: 30,
+    abilities: ab(19, 10, 16, 3, 12, 6), skills: { perception: 3, stealth: 2 }, immunities: ["cold"], senses: "darkvision 60 ft", passivePerception: 13, cr: 2, xp: 450, initiativeBonus: 0,
+    traits: [{ key: "snowCamouflage", name: "Snow Camouflage", description: "An original beast of the high passes: a white-furred, ice-crusted hunter halfway between bear and great ape. Advantage on Stealth in snow." }],
+    actions: [
+      { id: "multiattack", name: "Multiattack", kind: "multiattack", multiattack: ["bite", "claw"] },
+      { id: "bite", name: "Bite", kind: "melee", toHit: 6, reach: 5, damage: [{ dice: "1d8", bonus: 4, type: "piercing" }, { dice: "1d6", bonus: 0, type: "cold" }] },
+      { id: "claw", name: "Claw", kind: "melee", toHit: 6, reach: 5, damage: [{ dice: "2d6", bonus: 4, type: "slashing" }], rider: { condition: "grappled", note: "Grappled (escape DC 14)." } },
+    ],
+    behavior: "brute" }),
+  m({ id: "rimeKnight", name: "Rime Knight", size: "medium", type: "undead", alignment: "lawful evil", ac: 16, hp: "12d8+36", avgHp: 90, speed: 30,
+    abilities: ab(17, 12, 16, 11, 13, 14), skills: { athletics: 6, perception: 4 }, saves: { con: 6, wis: 4 }, resistances: ["necrotic"], immunities: ["cold", "poison"], conditionImmunities: ["exhaustion", "poisoned"],
+    senses: "darkvision 60 ft", passivePerception: 14, languages: "Common", cr: 4, xp: 1100, initiativeBonus: 1,
+    traits: [{ key: "rimeArmour", name: "Rime Armour", description: "An original undead knight of Valdren's lost queen, encased in blue ice. Its plate rings like a bell when struck." }],
+    actions: [
+      { id: "multiattack", name: "Multiattack", kind: "multiattack", multiattack: ["rimeSword", "rimeSword"] },
+      { id: "rimeSword", name: "Rime Sword", kind: "melee", toHit: 6, reach: 5, damage: [{ dice: "1d8", bonus: 3, type: "slashing" }, { dice: "1d8", bonus: 0, type: "cold" }] },
+      { id: "glacialGaze", name: "Glacial Gaze", kind: "save", range: [30, 30], save: { ability: "con", dc: 14 }, rider: { condition: "restrained", note: "Frost creeps up the target's legs: Restrained." }, recharge: 5 },
+    ],
+    behavior: "leader" }),
+  m({ id: "rimeQueen", name: "The Rime Queen", size: "medium", type: "undead", alignment: "lawful evil", ac: 17, hp: "18d8+54", avgHp: 135, speed: 30,
+    abilities: ab(14, 16, 16, 15, 16, 20), skills: { insight: 7, perception: 7, persuasion: 9 }, saves: { dex: 7, wis: 7, cha: 9 }, resistances: ["necrotic"], immunities: ["cold", "poison"], conditionImmunities: ["charmed", "exhaustion", "frightened", "poisoned"],
+    senses: "darkvision 120 ft", passivePerception: 17, languages: "Common, Primordial", cr: 7, xp: 2900, initiativeBonus: 3,
+    traits: [{ key: "winterSovereign", name: "Winter Sovereign", description: "Original: Queen Ysmay of Valdren, who answered her husband's bargain with Death by bargaining with Winter itself." }],
+    actions: [
+      { id: "multiattack", name: "Multiattack", kind: "multiattack", multiattack: ["frostScepter", "frostScepter", "frostScepter"] },
+      { id: "frostScepter", name: "Frost Scepter", kind: "melee", toHit: 7, reach: 5, damage: [{ dice: "1d8", bonus: 3, type: "bludgeoning" }, { dice: "2d6", bonus: 0, type: "cold" }] },
+      { id: "iceLance", name: "Ice Lance", kind: "ranged", toHit: 7, range: [60, 120], damage: [{ dice: "3d8", bonus: 0, type: "cold" }] },
+      { id: "wintersBreath", name: "Winter's Breath", kind: "save", reach: 30, range: [30, 30], area: { shape: "cone", size: 30 }, save: { ability: "con", dc: 15, half: true }, damage: [{ dice: "6d8", bonus: 0, type: "cold" }], recharge: 5 },
+    ],
+    behavior: "leader" }),
+].map((x) => [x.id, x])));
