@@ -375,6 +375,8 @@ app.use("/api", (_req, res) => { res.status(404).json({ error: "Not found" }); }
 
 // ---- static web client
 if (fs.existsSync(WEB_DIST)) {
+  // browsers ask for /favicon.ico regardless of <link> tags; answer with the lantern
+  app.get("/favicon.ico", (_req, res) => res.type("image/png").sendFile(path.join(WEB_DIST, "favicon-32.png")));
   app.use(express.static(WEB_DIST));
   app.get("*", (_req, res) => res.sendFile(path.join(WEB_DIST, "index.html")));
 }

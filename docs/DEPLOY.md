@@ -223,6 +223,17 @@ Adding a friend later = add their email to the Access policy. Removing someone =
 In this mode the LAN address (`http://<vm-ip>:3000`) no longer lets anyone in, because there's no Cloudflare identity on it;
 set `ALLOW_INVITE_LOGIN=true` temporarily if you ever need LAN access while Cloudflare is down.
 
+### Brand the sign-in page
+
+Players see Cloudflare's sign-in page before the tavern. Make it look like the game:
+**Zero Trust → Settings → Custom Pages → Login page → Manage** (newer dashboards: **Reusable components → Custom pages**):
+
+- Organization name: `The Broken Lantern`
+- Logo: `https://raw.githubusercontent.com/PBreitbach1994/EmberfallBL/main/docs/brand/login-logo.png`
+- Header text: `Mercenaries welcome. Enter your email and we'll send you a code.`
+- Footer text: `Emberfall · ask the campaign owner for an invite`
+- Background color: `#1a120c`
+
 ### Invite players from the game (Cloudflare guest-list sync)
 
 Once Access sign-in works, you can let the game edit the Access policy for you: **Admin → Players → Invite a player**
