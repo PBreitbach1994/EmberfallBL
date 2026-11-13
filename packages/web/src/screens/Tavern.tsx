@@ -29,6 +29,7 @@ export function Tavern({ ctx }: { ctx: AppCtx }) {
           <Pill>Prosperity {c.prosperity}</Pill>
           <Pill>Reputation {c.reputation}</Pill>
           {c.settings.hardcore && <Pill kind="bad">Hardcore</Pill>}
+          <DifficultyControl ctx={ctx} />
           {!campaign.aiAvailable && <Pill kind="warn">AI DM offline (scripted mode)</Pill>}
         </div>
       </section>
@@ -92,6 +93,29 @@ export function Tavern({ ctx }: { ctx: AppCtx }) {
       {starting && <StartAdventure ctx={ctx} scenario={starting} onClose={() => setStarting(null)} />}
       {joining && <JoinAdventure ctx={ctx} adv={joining} onClose={() => setJoining(null)} />}
     </div>
+  );
+}
+
+const DIFFICULTIES = [
+  { id: "story", label: "Story", hint: "Relaxed: you'll almost always win. For learning the game or enjoying the tale." },
+  { id: "normal", label: "Normal", hint: "Every fight leaves you bloodied; roughly 1 in 5 can go wrong." },
+  { id: "hard", label: "Hard", hint: "Tougher, more accurate foes. Expect to lose some fights." },
+  { id: "brutal", label: "Brutal", hint: "Reinforcements, and monsters finish off the fallen. Plan every turn." },
+] as const;
+
+function DifficultyControl({ ctx }: { ctx: AppCtx }) {
+  const current = ctx.campaign?.campaign.settings.difficulty ?? "normal";
+  const info = DIFFICULTIES.find((d) => d.id === current)!;
+  if (!ctx.user.isAdmin) return <span title={info.hint}><Pill>Difficulty: {info.label}</Pill></span>;
+  return (
+    <label className="pill" title={info.hint} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      Difficulty
+      <select value={current} onChange={async (e) => {
+        try { await api("/api/campaign/settings", { method: "POST", body: { difficulty: e.target.value } }); await ctx.refreshCampaign(); } catch { /* toast shown by api */ }
+      }}>
+        {DIFFICULTIES.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+      </select>
+    </label>
   );
 }
 

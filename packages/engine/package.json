@@ -16,6 +16,8 @@
   },
   "scripts": {
     "build": "tsc -p .",
-    "test": "tsc -p . && node --test dist/test/*.test.js"
+    "test": "tsc -p . && node --test dist/test/*.test.js",
+    "sim": "tsc -p . && node dist/sim.js",
+    "calibrate": "tsc -p . && node dist/sim.js calibrate 40 src/campaign/content/balance.ts"
   }
 }

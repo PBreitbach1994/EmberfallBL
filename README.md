@@ -54,6 +54,8 @@ Environment: `PORT` (3000), `DATA_DIR` (`./data`), `INVITE_CODE` (`emberfall` �
   companion over; let the AI play one turn ("Auto"); be the DM yourself with DM tools (narrate, call checks, award loot,
   jump scenes, spawn monsters) while AI players react to your narration; or launch an autonomous AI party and read
   the tale in the chronicle afterwards.
+- **Difficulty** — Story / Normal / Hard / Brutal (campaign owner picks it on the tavern screen). Fights also scale
+  automatically to party size and to how far the party's level is above or below the scenario's.
 - **Hardcore** — campaign-wide or per character: no resurrection. Otherwise *Revivify* (in combat, within a minute,
   300 gp diamond) and the temple's *Raise Dead* (temple level 2, 500 gp, within two campaign weeks) bring heroes back.
 
@@ -101,10 +103,22 @@ packages/web      React client (tavern, characters, adventure, combat grid, DM p
 - **Spells:** ~60 that the engine fully adjudicates, cantrips through 3rd level (Fireball, Spirit Guardians, Revivify…).
 - **Monsters:** 27 stat blocks adapted from the SRD (giant rat to wight), each with a behaviour profile.
 
+## Balance tooling
+
+```bash
+npm run sim -w packages/engine -- 30 normal      # every encounter × 30 AI-party runs: win %, HP left, knockouts, deaths
+npm run calibrate -w packages/engine             # re-tune per-encounter power after editing or adding fights
+```
+
+Normal is calibrated so a party at the scenario's level ends most fights with roughly 40–55% of its HP
+(finales ~30%, the tutorial ~70%), winning about 80% of the time. Measured averages across all fights:
+Story 99% wins / 73% HP left, Normal ~80% / ~47%, Hard ~63% / 35%, Brutal ~30% / 13%.
+Monsters focus fire on wounded heroes, casters and concentration; on Brutal they also finish off the fallen.
+
 ## Adding content as the game grows
 
 Everything is plain data. To add a spell, monster, item, class feature or scenario, add an entry to the matching file in
-`packages/engine/src/data/` or `packages/engine/src/campaign/content/` and run `npm test`. Scenario authoring:
+`packages/engine/src/data/` or `packages/engine/src/campaign/content/` then run `npm run calibrate -w packages/engine` and `npm test`. Scenario authoring:
 see `campaign/types.ts`: a scenario is a graph of `SceneNode`s with `options` (checks, requirements, outcomes, effects)
 and optional `encounter`s drawn as ASCII maps. Personal quests, events and buildings follow the same pattern.
 

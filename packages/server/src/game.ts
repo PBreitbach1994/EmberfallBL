@@ -52,6 +52,7 @@ export class Game {
       // make sure newly added content/buildings appear in old saves
       const c = this.store.campaigns.get(CAMPAIGN_ID)!;
       for (const b of Object.values(BUILDINGS)) if (c.buildings[b.id] === undefined) c.buildings[b.id] = b.startingLevel;
+      c.settings.difficulty ??= "normal";
       this.store.saveCampaign(c);
       return;
     }
@@ -65,7 +66,7 @@ export class Game {
       roadDeck: rng.shuffle(Object.values(EVENTS).filter((e) => e.deck === "road").map((e) => e.id)),
       townDeck: rng.shuffle(Object.values(EVENTS).filter((e) => e.deck === "town").map((e) => e.id)),
       retired: [], chronicle: [{ week: 1, text: "The Broken Lantern opens its doors to a new company of adventurers." }],
-      settings: { hardcore: false, flanking: false, aiDm: true, aiCompanionBanter: true, autoReactions: true, maxPartySize: 6, allowAutonomousParties: true },
+      settings: { difficulty: "normal", hardcore: false, flanking: false, aiDm: true, aiCompanionBanter: true, autoReactions: true, maxPartySize: 6, allowAutonomousParties: true },
     };
     this.store.saveCampaign(c);
   }

@@ -72,35 +72,52 @@ function monsterReach(a: MonsterAction): number {
   return a.reach ?? 5;
 }
 
+/**
+ * Monster target selection. Every behaviour scores the same factors — can I reach it this turn,
+ * how close is it to dropping, how hard is it to hit, is it a caster holding concentration — with
+ * behaviour-specific weights. This is what makes monsters focus fire instead of spreading damage.
+ */
 function chooseMonsterTarget(enc: EncounterState, m: Combatant): Combatant | undefined {
-  const foes = enemiesOf(enc, m).filter((f) => !f.effects.some((e) => e.kind === "hidden"));
-  if (!foes.length) return enemiesOf(enc, m)[0];
-  const near = (x: Combatant) => dist(m.pos, x.pos);
-  const up = foes.filter((f) => f.hp > 0);
-  const pool = up.length ? up : foes;
-  switch (m.behavior) {
-    case "brute": {
-      const last = m.lastAttackerId ? byId(enc, m.lastAttackerId) : undefined;
-      if (last && alive(last) && last.hp > 0 && near(last) <= 30) return last;
-      return [...pool].sort((a, b) => near(a) - near(b))[0];
-    }
-    case "pack": {
-      // gang up: prefer foes already engaged by allies, then nearest
-      const allies = alliesOf(enc, m).filter(alive);
-      return [...pool].sort((a, b) => {
-        const ea = allies.filter((x) => dist(x.pos, a.pos) <= 5).length;
-        const eb = allies.filter((x) => dist(x.pos, b.pos) <= 5).length;
-        return eb - ea || near(a) - near(b);
-      })[0];
-    }
-    case "archer":
-    case "skirmisher":
-      return [...pool].sort((a, b) => a.hp - b.hp || near(a) - near(b))[0];
-    case "leader":
-      return [...pool].sort((a, b) => a.ac - b.ac || near(a) - near(b))[0];
-    default:
-      return [...pool].sort((a, b) => near(a) - near(b))[0];
+  const brutal = enc.difficulty === "brutal";
+  let foes = enemiesOf(enc, m).filter((f) => !f.effects.some((e) => e.kind === "hidden"));
+  // On Brutal, mindless and brute monsters finish off adjacent dying heroes
+  if (brutal && (m.behavior === "brute" || m.behavior === "mindless")) {
+    const downed = enc.combatants.find((c) => hostile(m, c) && !c.dead && c.hp <= 0 && dist(c.pos, m.pos) <= 5);
+    if (downed) return downed;
   }
+  if (!foes.length) return enemiesOf(enc, m)[0];
+  const melee = (m.monsterActions ?? []).filter((a) => a.kind === "melee");
+  const reach = Math.max(5, ...melee.map((a) => a.reach ?? 5));
+  const ranged = (m.monsterActions ?? []).some((a) => a.kind === "ranged" || a.range);
+  const allies = alliesOf(enc, m).filter(alive);
+  const move = effectiveSpeed(m);
+  const score = (f: Combatant) => {
+    const d = dist(m.pos, f.pos);
+    let sc = 0;
+    // reachability: already in reach, reachable this turn, reachable with a dash, or far
+    const reachable = d <= reach || (melee.length > 0 && approachTile(enc, m, f, reach, move) !== null);
+    if (ranged && (m.behavior === "archer" || m.behavior === "skirmisher" || !melee.length)) sc += d > 80 ? 15 : 0;
+    else sc += reachable ? 0 : d <= reach + move * 2 ? 12 : 30 + d / 5;
+    // finish the wounded: effective HP relative to a typical hit
+    sc += Math.min(30, (f.hp + f.tempHp) / 2);
+    // harder to hit = less attractive
+    sc += (f.ac - 12) * 1.5;
+    // casters, healers and concentrators are priority targets for smarter monsters
+    const caster = f.classId === "wizard" || f.classId === "cleric" || f.classId === "sorcerer" || f.classId === "warlock" || f.classId === "druid" || f.classId === "bard";
+    const smart = m.behavior === "leader" || m.behavior === "skirmisher" || m.behavior === "archer" || m.abilities.int >= 8;
+    if (smart && f.concentratingOn) sc -= 10;
+    if (smart && caster) sc -= 5;
+    // pack hunters gang up on whoever their allies already engage
+    if (m.behavior === "pack") sc -= 6 * allies.filter((x) => dist(x.pos, f.pos) <= 5).length;
+    // brutes hold a grudge
+    if (m.behavior === "brute" && m.lastAttackerId === f.id) sc -= 8;
+    // mindless things go for the nearest
+    if (m.behavior === "mindless") sc += d / 2;
+    // stick with the current victim to avoid dithering
+    if (m.effects.some((e) => e.targetId === f.id)) sc -= 3;
+    return sc;
+  };
+  return [...foes].sort((a, b) => score(a) - score(b))[0];
 }
 
 function planMonster(enc: EncounterState, m: Combatant): CombatCommand {

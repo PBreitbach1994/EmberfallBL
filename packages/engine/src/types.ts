@@ -405,6 +405,7 @@ export interface EncounterState {
   round: number;
   budget: TurnBudget;
   status: "active" | "victory" | "defeat" | "fled";
+  difficulty?: "story" | "normal" | "hard" | "brutal";
   log: LogEntry[];
   objective?: string;
   rngState: number;

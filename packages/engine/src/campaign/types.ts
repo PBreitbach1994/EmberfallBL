@@ -173,7 +173,11 @@ export interface CampaignState {
   settings: CampaignSettings;
 }
 
+export type Difficulty = "story" | "normal" | "hard" | "brutal";
+
 export interface CampaignSettings {
+  /** encounter difficulty; scales monsters on top of automatic party-level scaling (default "normal") */
+  difficulty?: Difficulty;
   hardcore: boolean;              // permadeath: no resurrection
   flanking: boolean;              // optional rule: advantage when flanking
   aiDm: boolean;                  // use the AI DM for narration (requires API key)

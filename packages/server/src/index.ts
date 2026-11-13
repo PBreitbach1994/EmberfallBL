@@ -88,6 +88,10 @@ app.post("/api/campaign/settings", wrap((req) => {
   const c = game.campaign();
   const s = req.body ?? {};
   for (const k of ["hardcore", "aiDm", "aiCompanionBanter", "autoReactions", "allowAutonomousParties", "flanking"] as const) if (typeof s[k] === "boolean") c.settings[k] = s[k];
+  if (["story", "normal", "hard", "brutal"].includes(s.difficulty)) {
+    c.settings.difficulty = s.difficulty;
+    c.chronicle.push({ week: c.week, text: `The campaign difficulty is now ${s.difficulty}.` });
+  }
   if (typeof s.maxPartySize === "number") c.settings.maxPartySize = Math.max(1, Math.min(8, s.maxPartySize));
   store.saveCampaign(c);
   game.broadcastCampaign();

@@ -56,7 +56,7 @@ const FIGHTS: Record<number, string[]> = {
   5: ["ogre", "ogre", "bugbearWarrior", "ghoul"],
 };
 const SIGNATURE: Record<string, RegExp[]> = {
-  paladin: [/smites|Lay On Hands/],
+  paladin: [/smites|Lay On Hands|casts (Bless|Cure Wounds|Shield of Faith)|Sacred Weapon/],
   monk: [/Martial Arts|Flurry/],
   bard: [/inspires|Vicious Mockery|Dissonant Whispers|Faerie Fire/],
   druid: [/Produce Flame|Entangle|Faerie Fire|Moonbeam|calls on the land|shifts into/],

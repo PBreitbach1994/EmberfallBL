@@ -1,7 +1,7 @@
 // The adventure runner: walks a party through a scenario's scene graph, resolving options,
 // checks, effects and encounters. This is pure rules logic with no AI; the AI DM layer sits on
 // top and may only act through the functions exported here.
-import { Rng, roll } from "../dice.js";
+import { Rng, roll, averageDice } from "../dice.js";
 import { MONSTERS } from "../data/monsters.js";
 import { itemExists, itemName } from "../data/equipment.js";
 import { CLASSES } from "../data/classes.js";
@@ -10,7 +10,9 @@ import { applyCombatantToSheet, canLevelUp, toCombatant } from "../rules/charact
 import { createEncounter, loadItems, monsterCombatant } from "../rules/combat.js";
 import { mapFromAscii } from "../rules/grid.js";
 import { groupCheck, rollCheck, type CheckResult } from "../rules/checks.js";
-import type { CampaignState, Effect, EncounterDef, EventCard, Outcome, Scenario, SceneCheck, SceneNode, SceneOption } from "./types.js";
+import type { Combatant } from "../types.js";
+import { BALANCE } from "./content/balance.js";
+import type { CampaignState, Difficulty, Effect, EncounterDef, EventCard, Outcome, Scenario, SceneCheck, SceneNode, SceneOption } from "./types.js";
 import { SKILL_ABILITY } from "../data/origins.js";
 
 export interface PartyMember {
@@ -339,10 +341,96 @@ export function beginEncounter(adv: AdventureState, ctx: AdventureContext, def: 
       if (idx >= 0) combatants.splice(idx, 1);
     }
   }
+  const scale = encounterScaling(ctx, members.map((p) => ctx.characters.get(p.characterId)!), currentNodeIdFor(ctx, def));
+  const extraFoes = scale.extra;
+  if (extraFoes > 0) {
+    // reinforcements: copies of the most numerous rank-and-file enemy (never the boss)
+    const counts2: Record<string, number> = {};
+    for (const m of def.monsters) counts2[m.monsterId] = (counts2[m.monsterId] ?? 0) + 1;
+    const grunt = Object.entries(counts2).sort((a, b) => b[1] - a[1] || (MONSTERS[a[0]]?.xp ?? 0) - (MONSTERS[b[0]]?.xp ?? 0))[0]?.[0];
+    const md = grunt ? MONSTERS[grunt] : undefined;
+    for (let i = 0; i < extraFoes && md; i++) {
+      const anchor = def.monsters.find((m) => m.monsterId === grunt)!.at;
+      const spot = findFreeSpot(map, combatants.map((c) => c.pos), anchor);
+      if (spot) combatants.push(monsterCombatant(md, `m-r-${i}`, spot, rng, { name: `${md.name} (reinforcement)` }));
+    }
+  }
+  for (const c of combatants) if (c.side === "enemy") scaleMonster(c, scale);
   adv.encounter = createEncounter({ id: `${adv.id}-${def.id}`, name: def.name, map, combatants, seed: rng.next() * 2 ** 32, objective: def.objective, surprised: def.surprise ? [def.surprise] : undefined });
+  adv.encounter.difficulty = ctx.campaign.settings.difficulty ?? "normal";
+  if (scale.note) adv.log.push(logEntry("system", scale.note));
   adv.status = "combat";
   adv.rngState = rng.state;
   adv.log.push(logEntry("system", `⚔ Combat: ${def.name}${def.objective ? ` — ${def.objective}` : ""}`));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Difficulty
+
+function currentNodeIdFor(ctx: AdventureContext, def: EncounterDef): string | undefined {
+  return Object.values(ctx.scenario.nodes).find((n) => n.encounter === def)?.id;
+}
+
+export interface EncounterScale { hp: number; hit: number; dmg: number; extra: number; dmgMul?: number; note?: string }
+
+/** Apply a single "power" factor: HP, damage and accuracy rise together so monsters become
+ *  dangerous rather than spongy. power 1 = unchanged. */
+export function applyPower(s: EncounterScale, power: number) {
+  const f = Math.pow(power, 0.6);
+  s.hp *= f;
+  s.dmgMul = (s.dmgMul ?? 1) * f;
+  s.hit += Math.max(-2, Math.min(3, Math.round((power - 1) * 1.5)));
+}
+
+/** Base multipliers per difficulty. "normal" is tuned so a party at the scenario's level wins most
+ *  fights but ends them bloodied; see `npm run sim` for the numbers. */
+export const DIFFICULTY_TABLE: Record<Difficulty, EncounterScale> = {
+  story: { hp: 0.75, hit: -1, dmg: 0, dmgMul: 0.8, extra: 0 },
+  normal: { hp: 1, hit: 0, dmg: 0, extra: 0 },
+  hard: { hp: 1.1, hit: 1, dmg: 0, dmgMul: 1.05, extra: 0 },
+  brutal: { hp: 1.2, hit: 1, dmg: 0, dmgMul: 1.15, extra: 1 },
+};
+
+export function encounterScaling(ctx: AdventureContext, party: CharacterSheet[], encounterId?: string): EncounterScale {
+  const diff = ctx.campaign.settings.difficulty ?? "normal";
+  const base = { ...DIFFICULTY_TABLE[diff] };
+  // per-encounter calibration from `npm run calibrate` (normalises authored fights to the same feel)
+  if (encounterId) applyPower(base, BALANCE[`${ctx.scenario.id}/${encounterId}`] ?? 1);
+  const notes: string[] = [];
+  // party level vs the scenario's recommended range (Gloomhaven-style scenario level)
+  const avg = party.length ? party.reduce((s, c) => s + c.level, 0) / party.length : 1;
+  const [lo, hi] = ctx.scenario.recommendedLevel;
+  if (avg > hi) {
+    const over = avg - hi;
+    base.hp *= 1 + 0.3 * over; base.hit += Math.round(over); base.dmg += Math.round(over * 1.5);
+    notes.push(`the foes have grown stronger to match your seasoned party`);
+  } else if (avg < lo) {
+    const under = lo - avg;
+    base.hp *= Math.max(0.5, 1 - 0.2 * under); base.hit -= Math.round(under);
+    notes.push(`the foes are a little weaker for an untested party`);
+  }
+  // party size: encounters are written for four heroes
+  const n = party.length;
+  if (n < 4) { base.hp *= Math.max(0.55, n / 4 + 0.05); if (n <= 2) base.extra = Math.max(0, base.extra - 1); }
+  if (n > 4) base.hp *= 1 + 0.15 * (n - 4);
+  return { ...base, note: notes.length ? `⚖ Scaling: ${notes.join("; ")}.` : undefined };
+}
+
+export function scaleMonster(c: Combatant, s: EncounterScale) {
+  c.maxHp = Math.max(1, Math.round(c.maxHp * s.hp));
+  c.hp = c.maxHp;
+  if (!c.monsterActions) return;
+  // clone: monster actions are shared with the static stat block
+  c.monsterActions = c.monsterActions.map((a) => ({
+    ...a,
+    toHit: a.toHit !== undefined ? a.toHit + s.hit : undefined,
+    save: a.save ? { ...a.save, dc: a.save.dc + s.hit } : undefined,
+    damage: a.damage?.map((d, i) => {
+      const extra = Math.round(averageDice(d.dice === "0" ? "0" : d.dice) + d.bonus) * ((s.dmgMul ?? 1) - 1);
+      return { ...d, bonus: d.bonus + Math.round(extra) + (i === 0 ? s.dmg : 0) };
+    }),
+    rider: a.rider?.dcSave ? { ...a.rider, dcSave: { ...a.rider.dcSave, dc: a.rider.dcSave.dc + s.hit } } : a.rider,
+  }));
 }
 
 function findFreeSpot(map: ReturnType<typeof mapFromAscii>, taken: { x: number; y: number }[], near: [number, number]) {
