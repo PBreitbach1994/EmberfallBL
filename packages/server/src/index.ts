@@ -111,6 +111,12 @@ app.post("/api/adventures/:id/act", wrap(async (req) => {
   return { view: game.view(adv, req.user.id) };
 }));
 
+const BACKUP_KEEP = Number(process.env.BACKUP_KEEP ?? 14);
+app.post("/api/admin/backup", wrap((req) => {
+  if (!req.user.isAdmin) throw new HttpError(403, "Only the campaign owner can do that.");
+  return { file: path.basename(store.backup(path.join(DATA_DIR, "backups"), BACKUP_KEEP)) };
+}));
+
 app.use("/api", (_req, res) => { res.status(404).json({ error: "Not found" }); });
 
 // ---- static web client
@@ -157,6 +163,14 @@ game.broadcast = (adventureId: string, view: (userId: string) => AdventureView) 
   for (const c of clients) if (c.adventureId === adventureId) send(c, { type: "adventure", view: view(c.user.id) });
 };
 game.broadcastCampaign = () => { for (const c of clients) send(c, { type: "campaign" }); };
+
+// ---- nightly backups into DATA_DIR/backups (BACKUP_HOURS=0 disables)
+const BACKUP_HOURS = Number(process.env.BACKUP_HOURS ?? 24);
+if (BACKUP_HOURS > 0) {
+  const run = () => { try { console.log(`Backup written: ${store.backup(path.join(DATA_DIR, "backups"), BACKUP_KEEP)}`); } catch (e) { console.error("Backup failed:", e); } };
+  setTimeout(run, 60_000).unref();
+  setInterval(run, BACKUP_HOURS * 3600_000).unref();
+}
 
 server.listen(PORT, () => {
   console.log(`🏮 Emberfall is open on http://localhost:${PORT}  (AI DM: ${aiAvailable() ? "enabled" : "disabled — set ANTHROPIC_API_KEY"}; invite code: ${INVITE_CODE === "emberfall" ? "emberfall (default — set INVITE_CODE!)" : "set"})`);

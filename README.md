@@ -18,8 +18,8 @@ docker compose up -d --build
 Open `http://<host>:3000`, enter a name and the invite code. The **first person to join is the campaign owner** (admin).
 Data lives in `./data/emberfall.db` (SQLite) — back that file up.
 
-On Proxmox the simplest path is a small Debian/Ubuntu VM or a Docker-enabled LXC (nesting on), 1 vCPU / 1 GB RAM is plenty.
-Put it behind your reverse proxy (Caddy/Traefik/NPM) for HTTPS; WebSockets on `/ws` must be proxied.
+**Full walkthrough — Proxmox VM, Docker, Cloudflare Tunnel, backups, updates: [docs/DEPLOY.md](docs/DEPLOY.md).**
+With a tunnel token in `.env`: `docker compose --profile tunnel up -d --build`. Update later with `./scripts/update.sh`.
 
 Without an API key the game runs with the **Scripted DM** (authored narration, option-driven play). With a key the
 **AI DM** narrates scenes, voices NPCs and adjudicates free-form actions.

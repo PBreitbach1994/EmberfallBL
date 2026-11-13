@@ -1,16 +1,36 @@
+# Emberfall — the game server, plus an optional Cloudflare Tunnel for public HTTPS access.
+#
+#   LAN only:            docker compose up -d --build
+#   With the tunnel:     docker compose --profile tunnel up -d --build
+#
+# Settings come from .env (copy .env.example). See docs/DEPLOY.md for the full walkthrough.
 services:
   emberfall:
     build: .
+    image: emberfall:latest
     container_name: emberfall
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     environment:
-      # Players need this code to join. Change it!
-      INVITE_CODE: ${INVITE_CODE:-change-me}
-      # Enables the Claude AI Dungeon Master. Leave empty for the scripted DM.
+      INVITE_CODE: ${INVITE_CODE:?Set INVITE_CODE in .env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # Optional: override the model (default claude-opus-5-5)
       CLAUDE_MODEL: ${CLAUDE_MODEL:-}
+      BACKUP_HOURS: ${BACKUP_HOURS:-24}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      TZ: ${TZ:-America/Chicago}
     volumes:
       - ./data:/data
+    ports:
+      # Published on the LAN for local play/testing. When using only the tunnel you can
+      # change this to "127.0.0.1:3000:3000" so it isn't reachable from other machines.
+      - "${BIND_ADDR:-0.0.0.0}:${HOST_PORT:-3000}:3000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: emberfall-tunnel
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env to use the tunnel profile}
+    depends_on:
+      - emberfall

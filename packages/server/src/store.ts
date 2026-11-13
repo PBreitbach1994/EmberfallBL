@@ -61,6 +61,17 @@ export class Store {
   }
   saveMeta(id: string, v: unknown) { this.meta.set(id, v); this.write("meta", id, v); }
 
+  /** Consistent online backup (safe while the game is running), keeping the newest `keep` files. */
+  backup(dir: string, keep = 14): string {
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const file = path.join(dir, `emberfall-${stamp}.db`);
+    this.db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    const old = fs.readdirSync(dir).filter((f) => /^emberfall-.*\.db$/.test(f)).sort();
+    for (const f of old.slice(0, Math.max(0, old.length - keep))) fs.unlinkSync(path.join(dir, f));
+    return file;
+  }
+
   userByToken(token: string): UserRecord | undefined {
     for (const u of this.users.values()) if (u.token === token) return u;
     return undefined;
