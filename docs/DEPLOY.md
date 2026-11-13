@@ -184,6 +184,45 @@ The invite code keeps strangers out of the game. Access keeps them from even loa
 - **Login method:** "One-time PIN": Cloudflare emails each person a code, so nobody needs a new account.
 - **Session duration:** 1 month, so players aren't prompted every visit.
 
+### Google sign-in (recommended once the tunnel works)
+
+Players sign in with Google; Cloudflare checks them against your allow-list before anything reaches the
+server, and the game verifies Cloudflare's signed identity on every request. No invite code, no passwords.
+
+**Order matters — do it in this sequence so nobody loses their characters:**
+
+1. **Pre-link existing players (optional).** While still on invite codes, open **Admin → Players** in the game and type
+   each player's Gmail address next to their name. They'll land on their existing account automatically.
+   Anyone you skip can claim their old account themselves on first sign-in (old name + invite code).
+2. **Google OAuth client.** In Google Cloud Console → *APIs & Services*:
+   - *OAuth consent screen*: External, app name "Emberfall", your email as support contact. Under *Audience*,
+     set Publishing status to **In production** (only the basic email/profile scopes are used, so no verification
+     review is needed) — otherwise only listed test users can sign in.
+   - *Credentials → Create credentials → OAuth client ID → Web application*:
+     - Authorized JavaScript origins: `https://<team>.cloudflareaccess.com`
+     - Authorized redirect URIs: `https://<team>.cloudflareaccess.com/cdn-cgi/access/callback`
+   - Copy the Client ID and Client secret. (`<team>` is your Zero Trust team name: **Zero Trust → Settings → Team name**.)
+3. **Cloudflare login method.** Zero Trust → **Settings → Authentication → Login methods → Add new → Google**:
+   paste the Client ID and secret, save, then click **Test**.
+4. **Access application.** Zero Trust → **Access → Applications → Add an application → Self-hosted**:
+   - Domain: your game hostname (e.g. `dnd.example.com`)
+   - Login methods: Google (untick One-time PIN if you want Google only)
+   - Policy: **Allow**, Include → **Emails** → your players' Gmail addresses (this is your invite list now)
+   - Save, then open the application and copy its **Application Audience (AUD) Tag**.
+5. **Tell the game.** In `.env` on the server:
+   ```
+   AUTH_MODE=access
+   CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com
+   CF_ACCESS_AUD=<the AUD tag>
+   ADMIN_EMAILS=<your gmail>
+   ```
+   then `./scripts/update.sh` (or `docker compose --profile tunnel up -d`).
+6. **Sign in** at your game URL. Your Gmail (from `ADMIN_EMAILS`) attaches to the existing owner account automatically.
+
+Adding a friend later = add their email to the Access policy. Removing someone = remove it there.
+In this mode the LAN address (`http://<vm-ip>:3000`) no longer lets anyone in, because there's no Cloudflare identity on it;
+set `ALLOW_INVITE_LOGIN=true` temporarily if you ever need LAN access while Cloudflare is down.
+
 ### Optional hardening at Cloudflare
 
 - **SSL/TLS → Edge Certificates:** turn on *Always Use HTTPS*.

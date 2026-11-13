@@ -13,6 +13,11 @@ export interface UserRecord {
   isAdmin: boolean;
   createdAt: number;
   prestigePerks: string[];
+  /** verified Google/Cloudflare Access email, lower-case */
+  email?: string;
+  /** additional Google emails that sign in to this same account (e.g. after merging accounts) */
+  altEmails?: string[];
+  lastSeen?: number;
 }
 
 type Kind = "user" | "character" | "campaign" | "adventure" | "meta";
@@ -71,6 +76,14 @@ export class Store {
     for (const f of old.slice(0, Math.max(0, old.length - keep))) fs.unlinkSync(path.join(dir, f));
     return file;
   }
+
+  userByEmail(email: string): UserRecord | undefined {
+    const e = email.toLowerCase();
+    for (const u of this.users.values()) if (u.email === e || u.altEmails?.includes(e)) return u;
+    return undefined;
+  }
+
+  deleteUser(id: string) { this.users.delete(id); this.remove("user", id); }
 
   userByToken(token: string): UserRecord | undefined {
     for (const u of this.users.values()) if (u.token === token) return u;

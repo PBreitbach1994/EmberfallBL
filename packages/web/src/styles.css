@@ -303,3 +303,13 @@ details summary { cursor: pointer; color: var(--ember2); }
   .topbar { padding: 0.5em 16px; }
   .advlist li, .buildings li, .shop li { flex-direction: column; align-items: flex-start; }
 }
+
+/* admin & roster */
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+.table th, .table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.08); vertical-align: middle; }
+.table th { font-weight: 600; opacity: 0.8; white-space: nowrap; }
+.admin input[type="email"], .admin select { max-width: 100%; }
+.roster { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 4px; }
+.roster-group h3 { margin: 10px 0 4px; }
+a.button { display: inline-block; text-decoration: none; text-align: center; padding: 10px 16px; border-radius: 8px; }

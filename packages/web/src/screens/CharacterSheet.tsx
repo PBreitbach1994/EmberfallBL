@@ -11,7 +11,7 @@ import { api, attempt, toast } from "../api";
 import { HpBar, Modal, Pill, XpBar, classLabel, humanize } from "../components/ui";
 
 export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
-  const sheet = [...ctx.characters, ...ctx.companions].find((c) => c.id === id);
+  const sheet = [...ctx.characters, ...ctx.companions, ...ctx.others].find((c) => c.id === id);
   const [levelOpen, setLevelOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | "retire" | "prestige" | "delete">(null);
   if (!sheet) return <div className="panel">Character not found. <button className="linkbtn" onClick={() => ctx.go({ name: "characters" })}>Back</button></div>;

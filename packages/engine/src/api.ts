@@ -4,7 +4,22 @@ import type { CampaignState, BuildingDef } from "./campaign/types.js";
 import type { CharacterCreationInput, LevelUpChoices } from "./rules/character.js";
 import type { DmMode } from "./campaign/adventure.js";
 
-export interface UserInfo { id: string; name: string; isAdmin: boolean }
+export interface UserInfo { id: string; name: string; isAdmin: boolean; email?: string; altEmails?: string[] }
+
+export type AuthConfig =
+  | { mode: "invite" }
+  | { mode: "access"; signedIn: false; allowInvite?: boolean }
+  | { mode: "access"; signedIn: true; email: string; needsProfile: true; suggestedName: string }
+  | { mode: "access"; signedIn: true; email: string; user: UserInfo; token: string };
+
+export interface AdminOverview {
+  authMode: "access" | "invite";
+  users: (UserInfo & { createdAt: number; lastSeen?: number; characters: number })[];
+  characters: CharacterSheet[];
+  adventures: { id: string; title: string; status: string; dmMode: string; startedAt: number; updatedAt: number; host: string; autonomous: boolean; party: { name: string; player: string }[] }[];
+}
+
+export interface RosterHero { id: string; name: string; classId: ClassId; species: string; level: number; dead: boolean; retired: boolean; prestige: number; player: string; onAdventure: boolean }
 
 export interface OptionView { id: string; label: string; check?: string; available: boolean; reason?: string }
 

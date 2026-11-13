@@ -7,6 +7,7 @@ import { Characters } from "./screens/Characters";
 import { CharacterCreate } from "./screens/CharacterCreate";
 import { CharacterSheetView } from "./screens/CharacterSheet";
 import { Adventure } from "./screens/Adventure";
+import { Admin } from "./screens/Admin";
 import { useSound } from "./sound";
 import { LanternIcon } from "./components/art/LanternIcon";
 
@@ -15,13 +16,16 @@ export type Screen =
   | { name: "characters" }
   | { name: "create" }
   | { name: "sheet"; id: string }
-  | { name: "adventure"; id: string };
+  | { name: "adventure"; id: string }
+  | { name: "admin" };
 
 export interface AppCtx {
   user: UserInfo;
   campaign: CampaignView | null;
   characters: CharacterSheet[];
   companions: CharacterSheet[];
+  /** other players' characters (campaign owner only, read-only) */
+  others: CharacterSheet[];
   refreshCampaign: () => Promise<void>;
   refreshCharacters: () => Promise<void>;
   go: (s: Screen) => void;
@@ -42,7 +46,7 @@ function screenFromHash(): Screen {
     const [n, id] = h.split("/");
     if (n === "adventure" && id) return { name: "adventure", id };
     if (n === "sheet" && id) return { name: "sheet", id };
-    if (n === "characters" || n === "create") return { name: n };
+    if (n === "characters" || n === "create" || n === "admin") return { name: n };
   } catch { /* ignore */ }
   return { name: "tavern" };
 }
@@ -64,6 +68,14 @@ export function App() {
   const [campaign, setCampaign] = useState<CampaignView | null>(null);
   const [characters, setCharacters] = useState<CharacterSheet[]>([]);
   const [companions, setCompanions] = useState<CharacterSheet[]>([]);
+  const [others, setOthers] = useState<CharacterSheet[]>([]);
+  const login = useCallback((u: UserInfo, t: string) => { storeAuth(u, t); setUser(u); }, []);
+  const logout = useCallback(() => {
+    storeAuth(null, null);
+    setUser(null);
+    // with Google sign-in, also end the Cloudflare Access session
+    if (user?.email) location.href = "/cdn-cgi/access/logout";
+  }, [user]);
 
   useEffect(() => onUnauthorized(() => { storeAuth(null, null); setUser(null); }), []);
 
@@ -78,12 +90,16 @@ export function App() {
     if (r) setCampaign(r);
   }, []);
   const refreshCharacters = useCallback(async () => {
-    const r = await attempt(() => api<{ characters: CharacterSheet[]; companions: CharacterSheet[] }>("/characters"));
-    if (r) { setCharacters(r.characters); setCompanions(r.companions); }
+    const r = await attempt(() => api<{ characters: CharacterSheet[]; companions: CharacterSheet[]; others?: CharacterSheet[] }>("/characters"));
+    if (r) { setCharacters(r.characters); setCompanions(r.companions); setOthers(r.others ?? []); }
   }, []);
 
   useEffect(() => {
     if (!user) return;
+    // refresh who we are (name/admin/email may have changed, e.g. after linking Google)
+    attempt(() => api<{ user: UserInfo }>("/me")).then((r) => {
+      if (r && JSON.stringify(r.user) !== JSON.stringify(user)) { storeAuth(r.user, getToken()); setUser(r.user); }
+    });
     refreshCampaign();
     refreshCharacters();
   }, [user, refreshCampaign, refreshCharacters]);
@@ -95,13 +111,13 @@ export function App() {
   if (!user) {
     return (
       <>
-        <Login onLogin={(u, t) => { storeAuth(u, t); setUser(u); }} />
+        <Login onLogin={login} />
         <ToastHost />
       </>
     );
   }
 
-  const ctx: AppCtx = { user, campaign, characters, companions, refreshCampaign, refreshCharacters, go };
+  const ctx: AppCtx = { user, campaign, characters, companions, others, refreshCampaign, refreshCharacters, go };
   const nav = (s: Screen, label: string) => (
     <button className={`navbtn ${screen.name === s.name ? "active" : ""}`} onClick={() => go(s)}>{label}</button>
   );
@@ -119,11 +135,12 @@ export function App() {
         <nav>
           {nav({ name: "tavern" }, "Tavern")}
           {nav({ name: "characters" }, "Characters")}
+          {user.isAdmin && nav({ name: "admin" }, "Admin")}
         </nav>
         <div className="userbox">
           <SoundToggle />
           <span>{user.name}</span>
-          <button className="linkbtn" onClick={() => { storeAuth(null, null); setUser(null); }}>Leave</button>
+          <button className="linkbtn" onClick={logout}>Leave</button>
         </div>
       </header>
       <main className="content">
@@ -132,6 +149,7 @@ export function App() {
         {screen.name === "create" && <CharacterCreate ctx={ctx} />}
         {screen.name === "sheet" && <CharacterSheetView ctx={ctx} id={screen.id} />}
         {screen.name === "adventure" && <Adventure ctx={ctx} id={screen.id} />}
+        {screen.name === "admin" && <Admin ctx={ctx} />}
       </main>
       <ToastHost />
     </div>

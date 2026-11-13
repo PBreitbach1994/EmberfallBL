@@ -1,6 +1,6 @@
 import { Portrait } from "../components/art/Portrait";
-import { useState } from "react";
-import type { CharacterSheet } from "@tavern/engine";
+import { useEffect, useState } from "react";
+import type { CharacterSheet, RosterHero } from "@tavern/engine";
 import { BACKGROUNDS, CLASSES, SPECIES } from "@tavern/engine";
 import type { AppCtx } from "../App";
 import { api, attempt } from "../api";
@@ -31,6 +31,7 @@ export function Characters({ ctx }: { ctx: AppCtx }) {
           <div className="cards">{retired.map((c) => <CharCard key={c.id} c={c} onOpen={() => ctx.go({ name: "sheet", id: c.id })} />)}</div>
         </section>
       )}
+      <CompanyRoster ctx={ctx} />
       <section className="panel">
         <h2>Tavern regulars (AI companions)</h2>
         <p className="small muted">Anyone can recruit these for an adventure.</p>
@@ -104,5 +105,36 @@ function QuickBuild({ ctx, onClose }: { ctx: AppCtx; onClose: () => void }) {
         <button className="primary" onClick={go}>Build</button>
       </div>
     </Modal>
+  );
+}
+
+/** Every player's heroes, so the company can see who's who. The campaign owner can open full sheets. */
+function CompanyRoster({ ctx }: { ctx: AppCtx }) {
+  const [heroes, setHeroes] = useState<RosterHero[] | null>(null);
+  useEffect(() => { attempt(() => api<{ heroes: RosterHero[] }>("/roster")).then((r) => r && setHeroes(r.heroes)); }, [ctx.characters.length]);
+  if (!heroes) return null;
+  const others = heroes.filter((h) => !ctx.characters.some((c) => c.id === h.id));
+  if (!others.length) return null;
+  const byPlayer = new Map<string, RosterHero[]>();
+  for (const h of others) byPlayer.set(h.player, [...(byPlayer.get(h.player) ?? []), h]);
+  return (
+    <section className="panel">
+      <h2>The Company</h2>
+      <p className="small muted">Heroes other players have brought to the Broken Lantern.</p>
+      {[...byPlayer.entries()].map(([player, list]) => (
+        <div key={player} className="roster-group">
+          <h3>{player}</h3>
+          <ul className="roster">
+            {list.map((h) => (
+              <li key={h.id}>
+                <strong>{h.name}</strong>{h.prestige ? ` ★${h.prestige}` : ""} — {SPECIES[h.species as keyof typeof SPECIES]?.name} {CLASSES[h.classId]?.name} {h.level}
+                {h.dead && <> <Pill kind="bad">dead</Pill></>}{h.retired && <> <Pill>retired</Pill></>}{h.onAdventure && <> <Pill kind="warn">adventuring</Pill></>}
+                {ctx.user.isAdmin && <> <button className="linkbtn" onClick={() => ctx.go({ name: "sheet", id: h.id })}>Sheet</button></>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
   );
 }

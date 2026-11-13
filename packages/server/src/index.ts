@@ -10,6 +10,7 @@ import { Store, newId, newToken, type UserRecord } from "./store.js";
 import { Game, HttpError } from "./game.js";
 import { Town } from "./town.js";
 import { aiAvailable } from "./dm.js";
+import { accessConfigFromEnv, accessTokenFrom, adminEmails, verifyAccessJwt } from "./auth.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -24,15 +25,35 @@ const town = new Town(game);
 const app = express();
 app.use(express.json({ limit: "256kb" }));
 
-type AuthedRequest = Request & { user: UserRecord };
+type AuthedRequest = Request & { user: UserRecord; accessEmail?: string };
 
-function auth(req: Request, _res: Response, next: NextFunction) {
-  const h = req.header("authorization") ?? "";
-  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
-  const user = token ? store.userByToken(token) : undefined;
-  if (!user) return next(new HttpError(401, "Please sign in."));
-  (req as AuthedRequest).user = user;
-  next();
+const ACCESS = accessConfigFromEnv();
+const ALLOW_INVITE_LOGIN = !ACCESS || process.env.ALLOW_INVITE_LOGIN === "true";
+const publicUser = (u: UserRecord) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin, email: u.email, altEmails: u.altEmails });
+
+/** Resolve the caller. In Access mode the verified Cloudflare identity wins; tokens are only a fallback
+ *  when invite login is explicitly allowed (e.g. LAN access while Cloudflare is down). */
+async function resolveUser(headers: Request["headers"], token: string): Promise<{ user?: UserRecord; email?: string }> {
+  if (ACCESS) {
+    const id = await verifyAccessJwt(ACCESS, accessTokenFrom(headers));
+    if (id) return { user: store.userByEmail(id.email), email: id.email };
+    if (!ALLOW_INVITE_LOGIN) return {};
+  }
+  return { user: token ? store.userByToken(token) : undefined };
+}
+
+async function auth(req: Request, _res: Response, next: NextFunction) {
+  try {
+    const h = req.header("authorization") ?? "";
+    const r = await resolveUser(req.headers, h.startsWith("Bearer ") ? h.slice(7) : "");
+    if (!r.user) {
+      if (r.email) return next(new HttpError(409, "Finish setting up your account."));
+      return next(new HttpError(401, ACCESS ? "Please sign in with Google." : "Please sign in."));
+    }
+    (req as AuthedRequest).user = r.user;
+    if (!r.user.lastSeen || Date.now() - r.user.lastSeen > 5 * 60_000) { r.user.lastSeen = Date.now(); store.saveUser(r.user); }
+    next();
+  } catch (e) { next(e); }
 }
 const wrap = (fn: (req: AuthedRequest, res: Response) => unknown) => async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -42,7 +63,55 @@ const wrap = (fn: (req: AuthedRequest, res: Response) => unknown) => async (req:
 };
 
 // ---- auth
+/** Tells the client how to sign in; in Access mode it also signs the player straight in. */
+app.get("/api/auth/config", wrap(async (req) => {
+  if (!ACCESS) return { mode: "invite" };
+  const id = await verifyAccessJwt(ACCESS, accessTokenFrom(req.headers));
+  if (!id) return { mode: "access", allowInvite: ALLOW_INVITE_LOGIN, signedIn: false };
+  let user = store.userByEmail(id.email);
+  // the campaign owner's email auto-links to the existing owner account the first time
+  if (!user && adminEmails().includes(id.email)) {
+    const owners = [...store.users.values()].filter((u) => u.isAdmin && !u.email);
+    if (owners.length === 1) { user = owners[0]; user.email = id.email; }
+  }
+  if (!user) return { mode: "access", signedIn: true, email: id.email, needsProfile: true, suggestedName: id.name ?? id.email.split("@")[0] };
+  if (!user.token) user.token = newToken();
+  if (adminEmails().includes(id.email)) user.isAdmin = true;
+  user.lastSeen = Date.now();
+  store.saveUser(user);
+  return { mode: "access", signedIn: true, email: id.email, user: publicUser(user), token: user.token };
+}));
+
+/** First Google sign-in: create a new player, or claim an account made before Google sign-in existed. */
+app.post("/api/auth/profile", wrap(async (req) => {
+  if (!ACCESS) throw new HttpError(400, "Google sign-in isn't enabled.");
+  const id = await verifyAccessJwt(ACCESS, accessTokenFrom(req.headers));
+  if (!id) throw new HttpError(401, "Please sign in with Google.");
+  if (store.userByEmail(id.email)) throw new HttpError(400, "This Google account is already linked.");
+  let user: UserRecord;
+  if (req.body?.claimName) {
+    const name = String(req.body.claimName).trim().toLowerCase();
+    const old = [...store.users.values()].find((u) => u.name.toLowerCase() === name);
+    if (!old) throw new HttpError(404, "No adventurer by that name has signed the ledger.");
+    if (old.email) throw new HttpError(400, "That name is already linked to a Google account. Ask the campaign owner to fix it.");
+    if (String(req.body.inviteCode ?? "") !== INVITE_CODE) throw new HttpError(403, "That invite code isn't right — it proves the old name is yours.");
+    user = old;
+  } else {
+    const name = String(req.body?.displayName ?? "").trim().slice(0, 32);
+    if (!name) throw new HttpError(400, "Choose a name.");
+    if ([...store.users.values()].some((u) => u.name.toLowerCase() === name.toLowerCase())) throw new HttpError(400, "That name is taken. If it's your old account, claim it instead.");
+    user = { id: newId("usr"), name, token: "", isAdmin: store.users.size === 0, createdAt: Date.now(), prestigePerks: [] };
+  }
+  user.email = id.email;
+  user.token = newToken();
+  if (adminEmails().includes(id.email)) user.isAdmin = true;
+  user.lastSeen = Date.now();
+  store.saveUser(user);
+  return { user: publicUser(user), token: user.token };
+}));
+
 app.post("/api/auth/join", wrap((req) => {
+  if (!ALLOW_INVITE_LOGIN) throw new HttpError(403, "This tavern uses Google sign-in.");
   const name = String(req.body?.name ?? "").trim().slice(0, 32);
   const code = String(req.body?.inviteCode ?? "");
   if (!name) throw new HttpError(400, "Enter a name.");
@@ -52,17 +121,117 @@ app.post("/api/auth/join", wrap((req) => {
   if (!user) user = { id: newId("usr"), name, token: "", isAdmin: store.users.size === 0, createdAt: Date.now(), prestigePerks: [] };
   user.token = newToken();
   store.saveUser(user);
-  return { user: { id: user.id, name: user.name, isAdmin: user.isAdmin }, token: user.token };
+  return { user: publicUser(user), token: user.token };
 }));
 app.get("/api/health", (_req, res) => { res.json({ ok: true, ai: aiAvailable() }); });
 
 app.use("/api", auth);
-app.get("/api/me", wrap((req) => ({ user: { id: req.user.id, name: req.user.name, isAdmin: req.user.isAdmin } })));
+app.get("/api/me", wrap((req) => ({ user: publicUser(req.user) })));
+
+// ---- the company: everyone can see who's adventuring
+app.get("/api/roster", wrap(() => {
+  const owners = store.users;
+  return {
+    heroes: [...store.characters.values()].filter((c) => c.ownerId !== "ai").map((c) => ({
+      id: c.id, name: c.name, classId: c.classId, species: c.species, level: c.level, dead: c.dead, retired: c.retired, prestige: c.prestige,
+      player: owners.get(c.ownerId)?.name ?? "?", onAdventure: !!c.activeAdventureId,
+    })),
+  };
+}));
+
+// ---- campaign owner tools
+function requireAdmin(req: AuthedRequest) { if (!req.user.isAdmin) throw new HttpError(403, "Only the campaign owner can do that."); }
+
+app.get("/api/admin/overview", wrap((req) => {
+  requireAdmin(req);
+  const chars = [...store.characters.values()];
+  return {
+    authMode: ACCESS ? "access" : "invite",
+    users: [...store.users.values()].map((u) => ({ ...publicUser(u), createdAt: u.createdAt, lastSeen: u.lastSeen, characters: chars.filter((c) => c.ownerId === u.id).length })),
+    characters: chars,
+    adventures: [...store.adventures.values()].sort((a, b) => b.updatedAt - a.updatedAt).map((a) => ({
+      id: a.id, title: a.title, status: a.status, dmMode: a.dmMode, startedAt: a.startedAt, updatedAt: a.updatedAt,
+      host: store.users.get(a.hostUserId)?.name ?? "?", autonomous: !!a.autonomous,
+      party: a.party.map((p) => ({ name: store.characters.get(p.characterId)?.name ?? "?", player: p.userId === "ai" ? "AI" : store.users.get(p.userId)?.name ?? "?" })),
+    })),
+  };
+}));
+
+app.post("/api/admin/users/:id", wrap((req) => {
+  requireAdmin(req);
+  const u = store.users.get(req.params.id);
+  if (!u) throw new HttpError(404, "No such player.");
+  const b = req.body ?? {};
+  if (b.email !== undefined) {
+    const email = b.email ? String(b.email).trim().toLowerCase() : undefined;
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, "That doesn't look like an email address.");
+    const other = email ? store.userByEmail(email) : undefined;
+    if (other && other.id !== u.id) throw new HttpError(400, `${email} is already linked to ${other.name}. Merge the accounts instead.`);
+    u.email = email;
+  }
+  if (typeof b.name === "string" && b.name.trim()) u.name = b.name.trim().slice(0, 32);
+  if (typeof b.isAdmin === "boolean") {
+    if (!b.isAdmin && u.isAdmin && [...store.users.values()].filter((x) => x.isAdmin).length <= 1) throw new HttpError(400, "The campaign needs at least one owner.");
+    u.isAdmin = b.isAdmin;
+  }
+  store.saveUser(u);
+  return { user: publicUser(u) };
+}));
+
+/** Move everything from one player to another (e.g. someone made a second account), then remove the empty one. */
+app.post("/api/admin/users/:id/merge", wrap((req) => {
+  requireAdmin(req);
+  const from = store.users.get(req.params.id);
+  const into = store.users.get(String(req.body?.intoUserId ?? ""));
+  if (!from || !into || from.id === into.id) throw new HttpError(400, "Pick two different players.");
+  let moved = 0;
+  for (const c of store.characters.values()) if (c.ownerId === from.id) { c.ownerId = into.id; store.saveCharacter(c); moved++; }
+  for (const a of store.adventures.values()) {
+    let changed = false;
+    if (a.hostUserId === from.id) { a.hostUserId = into.id; changed = true; }
+    if (a.dmUserId === from.id) { a.dmUserId = into.id; changed = true; }
+    for (const p of a.party) {
+      if (p.userId === from.id) { p.userId = into.id; changed = true; }
+      if (p.controller.kind === "human" && p.controller.userId === from.id) { p.controller = { kind: "human", userId: into.id }; changed = true; }
+    }
+    if (a.encounter) for (const c of a.encounter.combatants) if (c.controller.kind === "human" && c.controller.userId === from.id) c.controller = { kind: "human", userId: into.id };
+    if (changed) store.saveAdventure(a);
+  }
+  into.prestigePerks = [...new Set([...(into.prestigePerks ?? []), ...(from.prestigePerks ?? [])])];
+  // keep every login working: the merged account's emails also sign in to the target
+  const emails = [from.email, ...(from.altEmails ?? [])].filter((e): e is string => !!e);
+  for (const e of emails) {
+    if (!into.email) into.email = e;
+    else if (e !== into.email && !(into.altEmails ?? []).includes(e)) into.altEmails = [...(into.altEmails ?? []), e];
+  }
+  into.isAdmin = into.isAdmin || from.isAdmin;
+  store.saveUser(into);
+  store.deleteUser(from.id);
+  game.broadcastCampaign();
+  return { ok: true, message: `Moved ${moved} character(s) from ${from.name} to ${into.name}.` };
+}));
+
+app.post("/api/admin/characters/:id/owner", wrap((req) => {
+  requireAdmin(req);
+  const c = store.characters.get(req.params.id);
+  if (!c) throw new HttpError(404, "No such character.");
+  const ownerId = String(req.body?.ownerId ?? "");
+  if (ownerId !== "ai" && !store.users.has(ownerId)) throw new HttpError(400, "Unknown player.");
+  c.ownerId = ownerId;
+  store.saveCharacter(c);
+  game.broadcastCampaign();
+  return { ok: true, message: `${c.name} now belongs to ${ownerId === "ai" ? "the tavern (AI companion)" : store.users.get(ownerId)!.name}.` };
+}));
 
 // ---- characters
 app.get("/api/characters", wrap((req) => {
   const all = [...store.characters.values()];
-  return { characters: all.filter((c) => c.ownerId === req.user.id), companions: all.filter((c) => c.ownerId === "ai" && !c.retired) };
+  return {
+    characters: all.filter((c) => c.ownerId === req.user.id),
+    companions: all.filter((c) => c.ownerId === "ai" && !c.retired),
+    // the campaign owner can open anyone's sheet (read-only)
+    others: req.user.isAdmin ? all.filter((c) => c.ownerId !== req.user.id && c.ownerId !== "ai") : [],
+  };
 }));
 app.get("/api/quests/draw", wrap(() => ({ options: town.drawQuests() })));
 app.post("/api/characters/roll", wrap((req) => town.rollScores(req.user)));
@@ -141,9 +310,9 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 interface Client { ws: WebSocket; user: UserRecord; adventureId?: string }
 const clients = new Set<Client>();
 
-wss.on("connection", (ws, req) => {
+wss.on("connection", async (ws, req) => {
   const token = new URL(req.url ?? "", "http://x").searchParams.get("token") ?? "";
-  const user = store.userByToken(token);
+  const { user } = await resolveUser(req.headers, token);
   if (!user) { ws.close(4001, "unauthorized"); return; }
   const client: Client = { ws, user };
   clients.add(client);
@@ -177,5 +346,5 @@ if (BACKUP_HOURS > 0) {
 }
 
 server.listen(PORT, () => {
-  console.log(`🏮 Emberfall is open on http://localhost:${PORT}  (AI DM: ${aiAvailable() ? "enabled" : "disabled — set ANTHROPIC_API_KEY"}; invite code: ${INVITE_CODE === "emberfall" ? "emberfall (default — set INVITE_CODE!)" : "set"})`);
+  console.log(`🏮 Emberfall is open on http://localhost:${PORT}  (AI DM: ${aiAvailable() ? "enabled" : "disabled — set ANTHROPIC_API_KEY"}; ${ACCESS ? `sign-in: Google via Cloudflare Access (${ACCESS.teamDomain})${ALLOW_INVITE_LOGIN ? " + invite code" : ""}` : `invite code: ${INVITE_CODE === "emberfall" ? "emberfall (default — set INVITE_CODE!)" : "set"}`})`);
 });

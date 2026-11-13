@@ -11,9 +11,14 @@ services:
     container_name: emberfall
     restart: unless-stopped
     environment:
-      INVITE_CODE: ${INVITE_CODE:?Set INVITE_CODE in .env}
+      INVITE_CODE: ${INVITE_CODE:?Set INVITE_CODE in .env (still used to claim pre-Google accounts)}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-}
+      AUTH_MODE: ${AUTH_MODE:-invite}
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      ALLOW_INVITE_LOGIN: ${ALLOW_INVITE_LOGIN:-false}
       BACKUP_HOURS: ${BACKUP_HOURS:-24}
       BACKUP_KEEP: ${BACKUP_KEEP:-14}
       TZ: ${TZ:-America/Chicago}
