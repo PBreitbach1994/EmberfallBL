@@ -88,15 +88,18 @@ packages/web      React client (tavern, characters, adventure, combat grid, DM p
 
 ## Implemented rules (v0.1)
 
-- **Classes (levels 1–5):** Fighter (Champion), Rogue (Thief), Cleric (Life), Wizard (Evoker) are unlocked at the
-  start; Barbarian (Berserker) and Ranger (Hunter) unlock through retirements.
+- **Classes (levels 1–5), all 12 SRD classes:** Fighter (Champion), Rogue (Thief), Cleric (Life) and Wizard (Evoker) are
+  unlocked at the start. Barbarian (Berserker) and Ranger (Hunter) unlock through retirements. Paladin (Devotion), Bard (Lore),
+  Monk (Open Hand), Sorcerer (Draconic), Warlock (Fiend) and Druid (Land) unlock through the story.
+- **Story:** Arc 1 "The Hollow Crown" (4 scenarios, levels 1–3), Arc 2 "The Frostbound Pass" (5 scenarios, levels 3–5,
+  branching finale), 3 side jobs, 24 road/town events, 12 personal quests.
 - **Species:** Human, Elf, Dwarf, Halfling, Dragonborn (fire), Gnome, Goliath (stone), Orc, Tiefling (infernal).
 - **Backgrounds:** Acolyte, Criminal, Sage, Soldier, with their origin feats (Alert, Magic Initiate, Savage Attacker, Skilled; plus Tough).
 - **2024 specifics:** weapon mastery (Cleave, Graze, Nick, Push, Sap, Slow, Topple, Vex), Heroic Inspiration, exhaustion
   as −2 per level, background ability scores, light-weapon extra attack, bonus-action spell rule, potions as a bonus action,
   surprise as disadvantage on initiative.
-- **Spells:** ~40 that the engine fully adjudicates, cantrips through 3rd level (Fireball, Spirit Guardians, Revivify…).
-- **Monsters:** 20 stat blocks adapted from the SRD (giant rat to wight), each with a behaviour profile.
+- **Spells:** ~60 that the engine fully adjudicates, cantrips through 3rd level (Fireball, Spirit Guardians, Revivify…).
+- **Monsters:** 27 stat blocks adapted from the SRD (giant rat to wight), each with a behaviour profile.
 
 ## Adding content as the game grows
 

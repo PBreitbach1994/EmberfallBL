@@ -274,9 +274,6 @@ export function applyEffects(adv: AdventureState, ctx: AdventureContext, effects
           adv.log.push(logEntry("combat", `${s.name} is ${e.condition === "exhaustion" ? "exhausted" : e.condition}.`, s.id));
         }
         break;
-      case "unlockClass":
-        if (!ctx.campaign.unlockedClasses.includes(e.classId)) { ctx.campaign.unlockedClasses.push(e.classId); adv.log.push(logEntry("system", `🗝 A new class is available at the Broken Lantern: ${e.classId}.`)); }
-        break;
       case "unlockScenario":
         if (!ctx.campaign.unlockedScenarios.includes(e.scenarioId)) { ctx.campaign.unlockedScenarios.push(e.scenarioId); adv.log.push(logEntry("system", `🗺 A new location is revealed on the campaign map.`)); }
         break;
