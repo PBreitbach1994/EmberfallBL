@@ -27,8 +27,8 @@ export function Login({ onLogin }: { onLogin: Done }) {
         {cfg?.mode === "invite" && <InviteForm onLogin={onLogin} />}
         {cfg?.mode === "access" && !cfg.signedIn && (
           <>
-            <p>This tavern signs guests in with Google.</p>
-            <a className="primary button" href="/">Sign in with Google</a>
+            <p>This tavern signs guests in through Cloudflare (email code or Google).</p>
+            <a className="primary button" href="/">Sign in</a>
             {cfg.allowInvite && <details><summary className="muted">Use an invite code instead</summary><InviteForm onLogin={onLogin} /></details>}
           </>
         )}
@@ -87,7 +87,7 @@ function FirstVisit({ cfg, onLogin }: { cfg: Extract<AuthConfig, { needsProfile:
       <p>Welcome, <strong>{cfg.email}</strong>. Marta squints at you over the bar. “New face? Or have I seen you before?”</p>
       <div className="tabs">
         <button type="button" className={mode === "new" ? "active" : ""} onClick={() => setMode("new")}>I'm new here</button>
-        <button type="button" className={mode === "claim" ? "active" : ""} onClick={() => setMode("claim")}>I played before Google sign-in</button>
+        <button type="button" className={mode === "claim" ? "active" : ""} onClick={() => setMode("claim")}>I played here before</button>
       </div>
       {mode === "new" ? (
         <label>What should the tavern call you?
@@ -95,7 +95,7 @@ function FirstVisit({ cfg, onLogin }: { cfg: Extract<AuthConfig, { needsProfile:
         </label>
       ) : (
         <>
-          <p className="muted">Link your old account (and all its characters) to this Google login. Enter the name you used and the invite code you joined with.</p>
+          <p className="muted">Link your old account (and all its characters) to this sign-in email. Enter the name you used and the invite code you joined with.</p>
           <label>Your old name
             <input value={claimName} onChange={(e) => setClaimName(e.target.value)} maxLength={30} required autoFocus />
           </label>
@@ -106,7 +106,7 @@ function FirstVisit({ cfg, onLogin }: { cfg: Extract<AuthConfig, { needsProfile:
       )}
       {err && <div className="error">{err}</div>}
       <button className="primary" disabled={busy}>{busy ? "Signing the ledger…" : mode === "new" ? "Enter the tavern" : "Claim my account"}</button>
-      <p className="muted small">Can't remember? The campaign owner can link your Google email to your old account from the Admin page.</p>
+      <p className="muted small">Can't remember? The campaign owner can link your email to your old account from the Admin page.</p>
     </form>
   );
 }

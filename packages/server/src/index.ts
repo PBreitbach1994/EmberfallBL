@@ -48,7 +48,7 @@ async function auth(req: Request, _res: Response, next: NextFunction) {
     const r = await resolveUser(req.headers, h.startsWith("Bearer ") ? h.slice(7) : "");
     if (!r.user) {
       if (r.email) return next(new HttpError(409, "Finish setting up your account."));
-      return next(new HttpError(401, ACCESS ? "Please sign in with Google." : "Please sign in."));
+      return next(new HttpError(401, ACCESS ? "Please sign in." : "Please sign in."));
     }
     (req as AuthedRequest).user = r.user;
     if (!r.user.lastSeen || Date.now() - r.user.lastSeen > 5 * 60_000) { r.user.lastSeen = Date.now(); store.saveUser(r.user); }
@@ -84,16 +84,16 @@ app.get("/api/auth/config", wrap(async (req) => {
 
 /** First Google sign-in: create a new player, or claim an account made before Google sign-in existed. */
 app.post("/api/auth/profile", wrap(async (req) => {
-  if (!ACCESS) throw new HttpError(400, "Google sign-in isn't enabled.");
+  if (!ACCESS) throw new HttpError(400, "Cloudflare sign-in isn't enabled.");
   const id = await verifyAccessJwt(ACCESS, accessTokenFrom(req.headers));
-  if (!id) throw new HttpError(401, "Please sign in with Google.");
-  if (store.userByEmail(id.email)) throw new HttpError(400, "This Google account is already linked.");
+  if (!id) throw new HttpError(401, "Please sign in.");
+  if (store.userByEmail(id.email)) throw new HttpError(400, "This email is already linked to a player.");
   let user: UserRecord;
   if (req.body?.claimName) {
     const name = String(req.body.claimName).trim().toLowerCase();
     const old = [...store.users.values()].find((u) => u.name.toLowerCase() === name);
     if (!old) throw new HttpError(404, "No adventurer by that name has signed the ledger.");
-    if (old.email) throw new HttpError(400, "That name is already linked to a Google account. Ask the campaign owner to fix it.");
+    if (old.email) throw new HttpError(400, "That name is already linked to another email. Ask the campaign owner to fix it.");
     if (String(req.body.inviteCode ?? "") !== INVITE_CODE) throw new HttpError(403, "That invite code isn't right — it proves the old name is yours.");
     user = old;
   } else {
@@ -111,7 +111,7 @@ app.post("/api/auth/profile", wrap(async (req) => {
 }));
 
 app.post("/api/auth/join", wrap((req) => {
-  if (!ALLOW_INVITE_LOGIN) throw new HttpError(403, "This tavern uses Google sign-in.");
+  if (!ALLOW_INVITE_LOGIN) throw new HttpError(403, "This tavern uses Cloudflare sign-in.");
   const name = String(req.body?.name ?? "").trim().slice(0, 32);
   const code = String(req.body?.inviteCode ?? "");
   if (!name) throw new HttpError(400, "Enter a name.");
@@ -346,5 +346,5 @@ if (BACKUP_HOURS > 0) {
 }
 
 server.listen(PORT, () => {
-  console.log(`🏮 Emberfall is open on http://localhost:${PORT}  (AI DM: ${aiAvailable() ? "enabled" : "disabled — set ANTHROPIC_API_KEY"}; ${ACCESS ? `sign-in: Google via Cloudflare Access (${ACCESS.teamDomain})${ALLOW_INVITE_LOGIN ? " + invite code" : ""}` : `invite code: ${INVITE_CODE === "emberfall" ? "emberfall (default — set INVITE_CODE!)" : "set"}`})`);
+  console.log(`🏮 Emberfall is open on http://localhost:${PORT}  (AI DM: ${aiAvailable() ? "enabled" : "disabled — set ANTHROPIC_API_KEY"}; ${ACCESS ? `sign-in: Cloudflare Access (${ACCESS.teamDomain})${ALLOW_INVITE_LOGIN ? " + invite code" : ""}` : `invite code: ${INVITE_CODE === "emberfall" ? "emberfall (default — set INVITE_CODE!)" : "set"}`})`);
 });

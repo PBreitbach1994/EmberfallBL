@@ -31,7 +31,7 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
     <div className="admin">
       <section className="panel">
         <h1>The Ledger</h1>
-        <p className="muted">Everything in the campaign: players, every character, and every adventure. Sign-in mode: <strong>{data.authMode === "access" ? "Google (Cloudflare Access)" : "invite code"}</strong>.</p>
+        <p className="muted">Everything in the campaign: players, every character, and every adventure. Sign-in mode: <strong>{data.authMode === "access" ? "Cloudflare Access (email)" : "invite code"}</strong>.</p>
         <div className="tabs">
           <button className={tab === "players" ? "active" : ""} onClick={() => setTab("players")}>Players ({data.users.length})</button>
           <button className={tab === "characters" ? "active" : ""} onClick={() => setTab("characters")}>Characters ({data.characters.length})</button>
@@ -42,10 +42,10 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
 
       {tab === "players" && (
         <section className="panel">
-          <p className="muted">Link each player's Google email so they land on their existing account when they sign in. If someone made a second account by accident, merge it into the right one — characters and adventures move with it.</p>
+          <p className="muted">Link each player's sign-in email so they land on their existing account when they sign in. If someone made a second account by accident, merge it into the right one — characters and adventures move with it.</p>
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Name</th><th>Google email</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
+              <thead><tr><th>Name</th><th>Sign-in email</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
               <tbody>
                 {data.users.filter((u) => !f || u.name.toLowerCase().includes(f) || (u.email ?? "").includes(f)).map((u) => (
                   <tr key={u.id}>
