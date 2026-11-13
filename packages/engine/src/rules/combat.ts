@@ -11,7 +11,7 @@ import type {
   GridMap, LogEntry, MonsterAction, MonsterDef, Point, TurnBudget,
 } from "../types.js";
 import { areaTiles, coverBonus, dist, findPath, hasLineOfSight, inBounds, occupant, passable, samePoint } from "./grid.js";
-import { rageDamage, sneakDice } from "../data/classes.js";
+import { rageDamage, sneakDice, martialArtsDie, bardicDie, SORCERY_SLOT_COST } from "../data/classes.js";
 
 // ---------------------------------------------------------------------------------------------
 // Construction
@@ -37,7 +37,8 @@ export function newBudget(c: Combatant): TurnBudget {
   let speed = effectiveSpeed(c);
   return {
     action: true, bonusAction: true, reaction: true, movement: speed,
-    attacksLeft: c.features.includes("extraAttack") ? 2 : 1, sneakAttackUsed: false,
+    attacksLeft: c.features.includes("extraAttack") || c.features.includes("thirstingBlade") ? 2 : 1, sneakAttackUsed: false,
+    meleeHits: [],
   };
 }
 
@@ -77,6 +78,15 @@ export function createEncounter(setup: EncounterSetup): EncounterState {
     log.push(entry("roll", `${c.name} rolls initiative: ${r.rolls.join("/")} ${fmtMod(c.initiativeBonus)} = ${r.total}`, c.id));
   }
   enc.order = [...enc.combatants].sort((a, b) => b.initiative - a.initiative).map((c) => c.id);
+  // Monk Uncanny Metabolism: on rolling initiative, regain all Focus and heal (once per Long Rest)
+  for (const c of enc.combatants) {
+    if (c.features.includes("uncannyMetabolism") && (c.resources.uncannyMetabolism ?? 0) > 0 && (c.resources.focus ?? 0) < c.level && !c.dead && c.hp > 0) {
+      c.resources.uncannyMetabolism--;
+      c.resources.focus = c.level;
+      const h = roll(rng, martialArtsDie(c.level)).total + c.level;
+      heal(c, h, log, "Uncanny Metabolism");
+    }
+  }
   enc.rngState = rng.state;
   enc.log.push(entry("system", `⚔ ${setup.name} — roll for initiative!`), ...log);
   enc.xpPool = enc.combatants.filter((c) => c.side === "enemy").reduce((s, c) => s + (c.xp ?? 0), 0);
@@ -129,7 +139,22 @@ function spellAttackBonus(c: Combatant): number {
   return c.profBonus + (c.spellAbility ? abilityMod(c, c.spellAbility) : 0);
 }
 export function spellDc(c: Combatant): number {
-  return 8 + spellAttackBonus(c);
+  return 8 + spellAttackBonus(c) + (c.effects.some((e) => e.kind === "innateSorcery") ? 1 : 0);
+}
+
+/** Monk focus / class feature save DC (8 + Wis + PB). */
+function featureDc(c: Combatant, ability: Ability): number {
+  return 8 + abilityMod(c, ability) + c.profBonus;
+}
+
+/** Bardic Inspiration: an inspired creature adds the die to a failed d20 Test when it could turn the result. */
+function useInspiration(c: Combatant, rng: Rng, total: number, target: number, log: LogEntry[], what: string): number {
+  const eff = c.effects.find((e) => e.kind === "inspired");
+  if (!eff || total >= target || total + (eff.amount ?? 6) < target) return total;
+  const d = rng.die(eff.amount ?? 6);
+  c.effects = c.effects.filter((e) => e !== eff);
+  log.push(entry("roll", `🎵 ${c.name} uses Bardic Inspiration on the ${what}: +${d} (d${eff.amount ?? 6}).`, c.id));
+  return total + d;
 }
 
 function blessBonus(c: Combatant, rng: Rng): number {
@@ -155,17 +180,36 @@ export function makeSave(enc: EncounterState, rng: Rng, c: Combatant, ability: A
   if (c.conditions.includes("restrained") && ability === "dex") adv--;
   const bonus = saveBonusOf(c, ability) + blessBonus(c, rng);
   const r = rollD20(rng, bonus, Math.sign(adv), { halflingLuck: c.features.includes("luck") });
-  const ok = r.total >= dc;
-  log.push(entry("roll", `${c.name} ${ability.toUpperCase()} save: ${r.rolls.join("/")} ${fmtMod(bonus)} = ${r.total} vs DC ${dc} — ${ok ? "success" : "failure"}`, c.id));
+  const pre = r.total;
+  const total = useInspiration(c, rng, pre, dc, log, "saving throw");
+  const ok = total >= dc;
+  log.push(entry("roll", `${c.name} ${ability.toUpperCase()} save: ${r.rolls.join("/")} ${fmtMod(bonus)}${total !== pre ? ` +${total - pre}` : ""} = ${total} vs DC ${dc} — ${ok ? "success" : "failure"}`, c.id));
   return ok;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Damage & healing
 
-export function applyDamage(enc: EncounterState, rng: Rng, target: Combatant, amount: number, type: DamageType, log: LogEntry[], opts: { crit?: boolean; sourceId?: string } = {}): number {
+export interface DamageOptions { crit?: boolean; sourceId?: string; melee?: boolean; attack?: boolean; reaction?: boolean }
+
+export function applyDamage(enc: EncounterState, rng: Rng, target: Combatant, amount: number, type: DamageType, log: LogEntry[], opts: DamageOptions = {}): number {
   if (target.dead || amount <= 0) return 0;
   let dmg = amount;
+  const source = opts.sourceId ? byId(enc, opts.sourceId) : undefined;
+  // Monk Deflect Attacks (reaction, automatic)
+  if (opts.attack && (type === "bludgeoning" || type === "piercing" || type === "slashing") && target.features.includes("deflectAttacks") && target.hp > 0 && targetHasReaction(enc, target)) {
+    useReaction(enc, target);
+    const red = roll(rng, "1d10").total + abilityMod(target, "dex") + target.level;
+    dmg = Math.max(0, dmg - red);
+    log.push(entry("combat", `🥋 ${target.name} deflects the blow, reducing the damage by ${red}.`, target.id));
+    if (dmg <= 0) return 0;
+  }
+  // Armor of Agathys: melee attackers take cold damage while the temp HP last
+  const agathys = target.effects.find((e) => e.kind === "armorOfAgathys");
+  if (agathys && opts.melee && target.tempHp > 0 && source && !source.dead && source.id !== target.id) {
+    log.push(entry("combat", `❄ ${source.name} is bitten by frost from ${target.name}'s Armor of Agathys (${agathys.amount} cold).`, target.id));
+    applyDamage(enc, rng, source, agathys.amount ?? 5, "cold", log, { sourceId: target.id, reaction: true });
+  }
   const rage = target.effects.some((e) => e.kind === "rage");
   if (target.immunities.includes(type)) { log.push(entry("combat", `${target.name} is immune to ${type}.`, target.id)); return 0; }
   if (target.resistances.includes(type) || (rage && (type === "bludgeoning" || type === "piercing" || type === "slashing"))) dmg = Math.floor(dmg / 2);
@@ -184,6 +228,12 @@ export function applyDamage(enc: EncounterState, rng: Rng, target: Combatant, am
     removeCondition(target, "unconscious");
     removeCondition(target, "incapacitated");
     log.push(entry("combat", `${target.name} wakes up!`, target.id));
+  }
+  // Hypnotic Pattern ends when the creature takes damage
+  if (target.effects.some((e) => e.kind === "pattern")) {
+    target.effects = target.effects.filter((e) => e.kind !== "pattern");
+    removeCondition(target, "charmed"); removeCondition(target, "incapacitated");
+    log.push(entry("combat", `${target.name} snaps out of the hypnotic pattern!`, target.id));
   }
   // Turn Undead ends when the creature takes damage
   if (target.effects.some((e) => e.kind === "frightenedBy")) {
@@ -217,6 +267,7 @@ export function applyDamage(enc: EncounterState, rng: Rng, target: Combatant, am
       return dmg;
     }
     target.hp = 0;
+    if (target.wildShape) revertWildShape(target, log);
     if (target.side === "party" && target.controller.kind !== "monster") {
       if (overflow >= target.maxHp) {
         target.dead = true;
@@ -233,6 +284,11 @@ export function applyDamage(enc: EncounterState, rng: Rng, target: Combatant, am
       target.dead = true;
       log.push(entry("death", `☠ ${target.name} falls${before > 0 ? "" : ""}.`, target.id));
       endConcentration(enc, target, log);
+      // Fiend warlock: Dark One's Blessing
+      if (source && source.features.includes("darkOnesBlessing") && hostile(source, target) && !source.dead) {
+        const t = Math.max(1, abilityMod(source, "cha") + source.level);
+        if (t > source.tempHp) { source.tempHp = t; log.push(entry("combat", `🔥 ${source.name} drinks in the moment of death: ${t} temporary HP (Dark One's Blessing).`, source.id)); }
+      }
     }
     return dmg;
   }
@@ -242,11 +298,33 @@ export function applyDamage(enc: EncounterState, rng: Rng, target: Combatant, am
     const ok = makeSave(enc, rng, target, "con", dc, log);
     if (!ok) endConcentration(enc, target, log);
   }
+  // Hellish Rebuke (automatic reaction)
+  if (!opts.reaction && source && hostile(source, target) && !source.dead && target.hp > 0 && target.spells.includes("hellishRebuke") && hasSlot(target, 1)
+    && targetHasReaction(enc, target) && dist(source.pos, target.pos) <= 60 && !target.wildShape) {
+    const slot = spendSlot(target, 1);
+    useReaction(enc, target);
+    log.push(entry("combat", `🔥 ${target.name} answers with Hellish Rebuke${slot > 1 ? ` (level ${slot})` : ""}!`, target.id));
+    const ok = makeSave(enc, rng, source, "dex", spellDc(target), log);
+    const r = roll(rng, `${1 + slot}d10`).total;
+    const amt = ok ? Math.floor(r / 2) : r;
+    log.push(entry("combat", `💥 ${source.name} takes ${amt} fire.`, target.id));
+    applyDamage(enc, rng, source, amt, "fire", log, { sourceId: target.id, reaction: true });
+  }
   return dmg;
+}
+
+function revertWildShape(c: Combatant, log: LogEntry[]) {
+  const w = c.wildShape;
+  if (!w) return;
+  c.ac = w.ac; c.abilities = w.abilities; c.speed = w.speed; c.attacks = w.attacks; c.size = w.size;
+  c.effects = c.effects.filter((e) => e.kind !== "wildShape");
+  c.wildShape = undefined;
+  log.push(entry("combat", `🐾 ${c.name} returns to their true form.`, c.id));
 }
 
 export function heal(target: Combatant, amount: number, log: LogEntry[], source?: string) {
   if (target.dead) return 0;
+  if (target.effects.some((e) => e.kind === "noHeal")) { log.push(entry("combat", `${target.name} can't regain HP (necrotic chill).`, target.id)); return 0; }
   const before = target.hp;
   target.hp = Math.min(target.maxHp, target.hp + amount);
   if (before <= 0 && target.hp > 0) {
@@ -266,7 +344,8 @@ function endConcentration(enc: EncounterState, c: Combatant, log: LogEntry[]) {
     if (!removed.length) continue;
     other.effects = other.effects.filter((e) => !(e.source === c.id && e.concentration));
     for (const r of removed) {
-      if (r.kind === "heldBySpell") removeCondition(other, "paralyzed");
+      if (r.kind === "heldBySpell") removeCondition(other, r.condition ?? "paralyzed");
+      if (r.kind === "pattern") { removeCondition(other, "charmed"); removeCondition(other, "incapacitated"); }
       if (r.kind === "asleep") { removeCondition(other, "unconscious"); removeCondition(other, "incapacitated"); }
     }
   }
@@ -310,6 +389,9 @@ function attackAdvantage(enc: EncounterState, ctx: AttackContext, notes: string[
   if (a.effects.some((e) => e.kind === "vexed" && e.targetId === t.id)) { adv++; notes.push("vex"); }
   if (a.effects.some((e) => e.kind === "sapped")) { dis++; notes.push("sapped"); }
   if (a.effects.some((e) => e.kind === "helped")) { adv++; notes.push("helped"); }
+  if (t.effects.some((e) => e.kind === "faerieFire")) { adv++; notes.push("faerie fire"); }
+  if (a.effects.some((e) => e.kind === "mockery")) { dis++; notes.push("mocked"); }
+  if (ctx.isSpell && a.effects.some((e) => e.kind === "innateSorcery")) { adv++; notes.push("innate sorcery"); }
   if (ctx.kind === "ranged") {
     const enemyAdjacent = enc.combatants.some((o) => hostile(o, a) && !isDown(o) && !incapacitated(o) && dist(o.pos, a.pos) <= 5);
     if (enemyAdjacent) { dis++; notes.push("enemy adjacent"); }
@@ -324,7 +406,7 @@ function attackAdvantage(enc: EncounterState, ctx: AttackContext, notes: string[
 
 function consumeOnAttackEffects(a: Combatant, t: Combatant) {
   t.effects = t.effects.filter((e) => e.kind !== "advantageNextAttackAgainst");
-  a.effects = a.effects.filter((e) => !(e.kind === "vexed" && e.targetId === t.id) && e.kind !== "sapped" && e.kind !== "helped" && e.kind !== "hidden");
+  a.effects = a.effects.filter((e) => !(e.kind === "vexed" && e.targetId === t.id) && e.kind !== "sapped" && e.kind !== "helped" && e.kind !== "hidden" && e.kind !== "mockery");
 }
 
 interface AttackRollResult { hit: boolean; crit: boolean; natural: number; total: number; adv: number }
@@ -338,11 +420,25 @@ function rollAttack(enc: EncounterState, rng: Rng, ctx: AttackContext, log: LogE
   let ac = effectiveAc(ctx.target) + cover;
   const critRange = ctx.attacker.features.includes("improvedCritical") && !ctx.isSpell ? 19 : 20;
   let crit = r.natural >= critRange;
-  let hit = r.natural !== 1 && (crit || r.total >= ac);
+  let total = r.natural === 1 ? r.total : useInspiration(ctx.attacker, rng, r.total, ac, log, "attack roll");
+  let hit = r.natural !== 1 && (crit || total >= ac);
+  // College of Lore: Cutting Words (automatic reaction from an enemy bard within 60 ft)
+  if (hit && !crit) {
+    const bard = enc.combatants.find((o) => o.features.includes("cuttingWords") && hostile(o, ctx.attacker) && !isDown(o) && (o.resources.bardicInspiration ?? 0) > 0
+      && dist(o.pos, ctx.attacker.pos) <= 60 && targetHasReaction(enc, o) && total - ac < bardicDie(o.level));
+    if (bard) {
+      useReaction(enc, bard);
+      bard.resources.bardicInspiration--;
+      const d = rng.die(bardicDie(bard.level));
+      total -= d;
+      hit = total >= ac;
+      log.push(entry("combat", `🎵 ${bard.name}'s Cutting Words distract ${ctx.attacker.name}: -${d}${hit ? "" : " — the attack misses!"}`, bard.id));
+    }
+  }
   // Auto-crit on paralyzed/unconscious within 5 ft
   if (hit && dist(ctx.attacker.pos, ctx.target.pos) <= 5 && ctx.target.conditions.some((x) => x === "paralyzed" || x === "unconscious")) crit = true;
   // Shield spell reaction (auto when it turns a hit into a miss)
-  if (hit && !crit && ctx.target.spells.includes("shield") && hasSlot(ctx.target, 1) && targetHasReaction(enc, ctx.target) && r.total < ac + 5) {
+  if (hit && !crit && ctx.target.spells.includes("shield") && hasSlot(ctx.target, 1) && targetHasReaction(enc, ctx.target) && total < ac + 5 && !ctx.target.wildShape) {
     spendSlot(ctx.target, 1);
     useReaction(enc, ctx.target);
     ctx.target.effects.push({ id: `shield-${ctx.target.id}`, name: "Shield", source: ctx.target.id, kind: "shieldSpell", amount: 5, expires: "startOfOwnTurn" });
@@ -351,9 +447,9 @@ function rollAttack(enc: EncounterState, rng: Rng, ctx: AttackContext, log: LogE
     log.push(entry("combat", `🛡 ${ctx.target.name} casts Shield! (+5 AC)`, ctx.target.id));
   }
   const advTxt = adv > 0 ? " (adv)" : adv < 0 ? " (disadv)" : "";
-  log.push(entry("roll", `${ctx.attacker.name} → ${ctx.target.name}: ${label}${advTxt} ${r.rolls.join("/")} ${fmtMod(bonus)} = ${r.total} vs AC ${ac}${cover ? ` (incl. +${cover} cover)` : ""} — ${crit ? "CRITICAL HIT!" : hit ? "hit" : "miss"}${notes.length ? ` [${notes.join(", ")}]` : ""}`, ctx.attacker.id, { natural: r.natural, rolls: r.rolls }));
+  log.push(entry("roll", `${ctx.attacker.name} → ${ctx.target.name}: ${label}${advTxt} ${r.rolls.join("/")} ${fmtMod(bonus)} = ${total} vs AC ${ac}${cover ? ` (incl. +${cover} cover)` : ""} — ${crit ? "CRITICAL HIT!" : hit ? "hit" : "miss"}${notes.length ? ` [${notes.join(", ")}]` : ""}`, ctx.attacker.id, { natural: r.natural, rolls: r.rolls }));
   consumeOnAttackEffects(ctx.attacker, ctx.target);
-  return { hit, crit, natural: r.natural, total: r.total, adv };
+  return { hit, crit, natural: r.natural, total, adv };
 }
 
 // Reaction tracking for non-active combatants lives in effects: a "used" reaction effect until their turn.
@@ -426,7 +522,41 @@ function weaponDamage(enc: EncounterState, rng: Rng, a: Combatant, t: Combatant,
   }
   log.push(entry("combat", `💥 ${t.name} takes ${Math.max(0, total)} ${atk.damageType} damage (${parts.join(", ")}).`, a.id));
   if (crit && a.side === "party") a.resources._crits = (a.resources._crits ?? 0) + 1;
-  applyDamage(enc, rng, t, Math.max(0, total), atk.damageType, log, { crit, sourceId: a.id });
+  applyDamage(enc, rng, t, Math.max(0, total), atk.damageType, log, { crit, sourceId: a.id, attack: true, melee: atk.kind === "melee" });
+  hexDamage(enc, rng, a, t, crit, log);
+}
+
+/** Warlock Hex: +1d6 necrotic when the caster hits the cursed creature with an attack. */
+function hexDamage(enc: EncounterState, rng: Rng, a: Combatant, t: Combatant, crit: boolean, log: LogEntry[]) {
+  if (t.dead || !t.effects.some((e) => e.kind === "hexed" && e.source === a.id)) return;
+  const h = roll(rng, "1d6", { crit }).total;
+  log.push(entry("combat", `🕯 Hex: ${t.name} takes ${h} necrotic.`, a.id));
+  applyDamage(enc, rng, t, h, "necrotic", log, { sourceId: a.id });
+}
+
+/** A full weapon/unarmed attack: roll, damage, mastery, and tracking hits for smites and Stunning Strike. */
+function weaponStrike(enc: EncounterState, rng: Rng, a: Combatant, t: Combatant, atk: AttackOption, kind: "melee" | "ranged", log: LogEntry[], opts: { offhand?: boolean; label?: string } = {}): AttackRollResult {
+  const res = rollAttack(enc, rng, { attacker: a, target: t, toHit: atk.toHit, kind, reach: atk.reach, range: atk.range, weapon: atk }, log, opts.label ?? atk.name);
+  if (res.hit) weaponDamage(enc, rng, a, t, atk, res.crit, res.adv, log, { offhand: opts.offhand });
+  applyMastery(enc, rng, a, t, atk, res.hit, log);
+  if (res.hit && kind === "melee" && current(enc).id === a.id) {
+    enc.budget.meleeHits = enc.budget.meleeHits ?? [];
+    enc.budget.meleeHits.push({ targetId: t.id, crit: res.crit, unarmed: atk.id === "unarmed" });
+  }
+  return res;
+}
+
+/** Applies temporary attack modifiers (Shillelagh, Sacred Weapon) to an attack option. */
+function effectiveAttack(a: Combatant, atk: AttackOption): AttackOption {
+  let x = atk;
+  const shil = a.effects.find((e) => e.kind === "shillelagh");
+  if (shil && (atk.weaponId === "club" || atk.weaponId === "quarterstaff")) {
+    const m = a.spellAbility ? abilityMod(a, a.spellAbility) : 0;
+    x = { ...x, toHit: m + a.profBonus, damage: a.level >= 5 ? "1d10" : "1d8", damageBonus: m, name: `${atk.name} (Shillelagh)` };
+  }
+  const sw = a.effects.find((e) => e.kind === "sacredWeapon");
+  if (sw && atk.kind === "melee" && atk.weaponId) x = { ...x, toHit: x.toHit + (sw.amount ?? 1), name: `${x.name} (Sacred)` };
+  return x;
 }
 
 function hasFightingStyle(_a: Combatant, _s: string) {
@@ -496,7 +626,7 @@ function pushAway(enc: EncounterState, from: Point, t: Combatant, feet: number, 
 function expireEffects(enc: EncounterState, actorId: string, when: "start" | "end") {
   for (const c of enc.combatants) {
     c.effects = c.effects.filter((e) => {
-      if (when === "start" && e.expires === "startOfSourceTurn" && e.source === actorId) return false;
+      if (when === "start" && e.expires === "startOfSourceTurn" && e.source === actorId) { if (e.kind === "stunnedBy") removeCondition(c, "stunned"); return false; }
       if (when === "start" && e.expires === "startOfOwnTurn" && c.id === actorId) return false;
       if (when === "end" && e.expires === "endOfSourceTurn" && e.source === actorId) return false;
       if (when === "end" && e.expires === "endOfOwnTurn" && c.id === actorId) return false;
@@ -531,6 +661,27 @@ function startTurn(enc: EncounterState, rng: Rng) {
       const dmg = ok ? Math.floor(r.total / 2) : r.total;
       log.push(entry("combat", `Spirit Guardians sear ${c.name} for ${dmg} radiant.`, caster.id));
       applyDamage(enc, rng, c, dmg, "radiant", log, { sourceId: caster.id });
+    }
+  }
+  // Moonbeam: creatures starting their turn in the beam
+  for (const caster of enc.combatants) {
+    const mb = caster.effects.find((e) => e.kind === "moonbeam" && e.source === caster.id);
+    if (!mb?.point || isDown(c) || dist(mb.point, c.pos) > 5) continue;
+    const ok = makeSave(enc, rng, c, "con", mb.saveDc ?? spellDc(caster), log);
+    const r = roll(rng, mb.dice ?? "2d10").total;
+    const dmg = ok ? Math.floor(r / 2) : r;
+    log.push(entry("combat", `🌕 The moonbeam sears ${c.name} for ${dmg} radiant.`, caster.id));
+    applyDamage(enc, rng, c, dmg, "radiant", log, { sourceId: caster.id });
+  }
+  // Searing Smite: burning creatures take fire damage, then try to put it out
+  const burn = c.effects.find((e) => e.kind === "burning");
+  if (burn && !isDown(c)) {
+    const r = roll(rng, burn.dice ?? "1d6").total;
+    log.push(entry("combat", `🔥 ${c.name} burns for ${r} fire.`, burn.source));
+    applyDamage(enc, rng, c, r, "fire", log, { sourceId: burn.source });
+    if (!c.dead && makeSave(enc, rng, c, "con", burn.saveDc ?? 13, log)) {
+      c.effects = c.effects.filter((e) => e !== burn);
+      log.push(entry("combat", `${c.name} puts out the flames.`, c.id));
     }
   }
   log.push(entry("system", `— ${c.name}'s turn (round ${enc.round}) —`, c.id));
@@ -635,7 +786,7 @@ function resolveMonsterAttack(enc: EncounterState, rng: Rng, m: Combatant, t: Co
     // goblin "extra damage with advantage"
     total += amt;
     parts.push(`${amt} ${d.type}`);
-    applyDamage(enc, rng, t, amt, d.type, log, { crit: res.crit, sourceId: m.id });
+    applyDamage(enc, rng, t, amt, d.type, log, { crit: res.crit, sourceId: m.id, attack: true, melee: kind === "melee" });
   }
   if (act.description?.includes("if the attack roll had Advantage") && res.adv > 0 && !t.dead) {
     const extra = rng.die(4); total += extra; parts.push(`${extra} (advantage)`);
@@ -853,6 +1004,17 @@ export function applyCommand(enc: EncounterState, actorId: string, cmd: CombatCo
       break;
     }
     case "channelDivinity": {
+      if (cmd.mode === "sacredWeapon") {
+        if (!a.features.includes("sacredWeapon")) return fail("You don't have Sacred Weapon.");
+        if ((a.resources.channelDivinity ?? 0) <= 0) return fail("No Channel Divinity uses left.");
+        if (!b.action && !b.attackActionTaken) return fail("Sacred Weapon is used as part of the Attack action.");
+        if (a.effects.some((e) => e.kind === "sacredWeapon")) return fail("Your weapon is already sacred.");
+        a.resources.channelDivinity--;
+        const amt = Math.max(1, abilityMod(a, "cha"));
+        a.effects.push({ id: `sacred-${a.id}`, name: "Sacred Weapon", source: a.id, kind: "sacredWeapon", amount: amt, expires: "never" });
+        log.push(entry("combat", `✨ ${a.name}'s weapon blazes with holy light! (+${amt} to melee weapon attack rolls)`, a.id));
+        break;
+      }
       if (!a.features.includes("channelDivinity")) return fail("You don't have Channel Divinity.");
       const e = needAction(); if (e) return fail(e);
       if ((a.resources.channelDivinity ?? 0) <= 0) return fail("No Channel Divinity uses left.");
@@ -944,8 +1106,9 @@ export function applyCommand(enc: EncounterState, actorId: string, cmd: CombatCo
       break;
     }
     case "attack": {
-      const atk = a.attacks.find((x) => x.id === cmd.attackId);
-      if (!atk) return fail("Unknown attack.");
+      const baseAtk = a.attacks.find((x) => x.id === cmd.attackId);
+      if (!baseAtk) return fail("Unknown attack.");
+      const atk = effectiveAttack(a, baseAtk);
       const t = target(cmd.targetId);
       if (!t || isDown(t) && t.side !== "party") return fail("Invalid target.");
       if (t.id === a.id) return fail("You can't attack yourself.");
@@ -973,13 +1136,260 @@ export function applyCommand(enc: EncounterState, actorId: string, cmd: CombatCo
         if (b.attacksLeft <= 0) b.action = false;
       }
       if (atk.light) b.lightAttackMade = true;
-      const res = rollAttack(enc, rng, { attacker: a, target: t, toHit: atk.toHit, kind, reach: atk.reach, range: atk.range, weapon: atk }, log, atk.name);
-      if (res.hit) weaponDamage(enc, rng, a, t, atk, res.crit, res.adv, log, { offhand });
-      applyMastery(enc, rng, a, t, atk, res.hit, log);
+      if (!offhand) b.attackActionTaken = true;
+      weaponStrike(enc, rng, a, t, atk, kind, log, { offhand });
       if (atk.thrown && kind === "ranged" && atk.weaponId) {
         const left = a.resources[`item:${atk.weaponId}`];
         if (left !== undefined) { a.resources[`item:${atk.weaponId}`] = left - 1; if (left - 1 <= 0) a.attacks = a.attacks.filter((x) => x.id !== atk.id); }
       }
+      break;
+    }
+    case "smite": {
+      const sp = SPELLS[cmd.spellId];
+      if (!sp || sp.effect?.kind !== "smite") return fail("That isn't a smite spell.");
+      const eff = sp.effect;
+      if (!a.spells.includes(sp.id)) return fail(`${a.name} hasn't prepared ${sp.name}.`);
+      if (!b.bonusAction) return fail("Smiting takes your bonus action.");
+      if (a.wildShape) return fail("You can't cast spells in Wild Shape.");
+      if (b.leveledSpellCast) return fail("You've already cast a spell with a spell slot this turn.");
+      const hitRec = (b.meleeHits ?? []).find((h) => h.targetId === cmd.targetId && !h.smitten);
+      if (!hitRec) return fail("Smite right after you hit that creature with a melee weapon or unarmed strike this turn.");
+      const t = target(cmd.targetId);
+      if (!t || t.dead) return fail("The target is already down.");
+      const free = sp.id === "divineSmite" && (a.resources.paladinsSmite ?? 0) > 0 && cmd.slotLevel === undefined;
+      let slot = 1;
+      if (free) a.resources.paladinsSmite--;
+      else {
+        const want = Math.max(1, cmd.slotLevel ?? 1);
+        if (!hasSlot(a, want)) return fail(`No spell slots of level ${want}+ remaining.`);
+        slot = spendSlot(a, want);
+        b.leveledSpellCast = true;
+      }
+      b.bonusAction = false;
+      b.bonusSpellCast = true;
+      hitRec.smitten = true;
+      const upcast = Math.max(0, slot - 1);
+      let dice = eff.dice;
+      const pm = eff.perSlot.match(/^(\d+)d(\d+)$/);
+      if (pm && upcast) dice += `+${parseInt(pm[1]) * upcast}d${pm[2]}`;
+      const fiendish = t.monsterId && ["undead", "fiend"].some((k) => MONSTERS[t.monsterId!]?.type.includes(k));
+      if (sp.id === "divineSmite" && fiendish) dice += "+1d8";
+      const r = roll(rng, dice, { crit: hitRec.crit });
+      log.push(entry("combat", `⚡ ${a.name} smites ${t.name} with ${sp.name}${free ? " (Paladin's Smite)" : slot > 1 ? ` (level ${slot})` : ""}: ${r.total} ${eff.type}${hitRec.crit ? " (critical!)" : ""}.`, a.id));
+      applyDamage(enc, rng, t, r.total, eff.type, log, { crit: hitRec.crit, sourceId: a.id });
+      if (!t.dead && eff.rider === "burning") {
+        t.effects = t.effects.filter((e) => e.kind !== "burning");
+        t.effects.push({ id: `burn-${t.id}`, name: "Burning", source: a.id, kind: "burning", dice: `${1 + upcast}d6`, saveDc: spellDc(a), saveAbility: "con", expires: "never" });
+        log.push(entry("combat", `🔥 ${t.name} bursts into searing flame!`, a.id));
+      }
+      if (!t.dead && eff.rider === "thunderous") {
+        if (!makeSave(enc, rng, t, "str", spellDc(a), log)) {
+          pushAway(enc, a.pos, t, 10, log);
+          if (addCondition(t, "prone")) log.push(entry("combat", `${t.name} is knocked Prone!`, a.id));
+        }
+      }
+      break;
+    }
+    case "layOnHands": {
+      if (!a.features.includes("layOnHands")) return fail("You don't have Lay On Hands.");
+      if (!b.bonusAction) return fail("Lay On Hands takes a bonus action.");
+      const t = target(cmd.targetId) ?? a;
+      if (t.dead) return fail(`${t.name} is beyond Lay On Hands.`);
+      if (dist(a.pos, t.pos) > 5) return fail("Touch range: the target must be within 5 ft.");
+      const pool = a.resources.layOnHands ?? 0;
+      if (cmd.curePoison) {
+        if (pool < 5) return fail("Curing poison costs 5 points from the pool.");
+        if (!t.conditions.includes("poisoned")) return fail(`${t.name} isn't poisoned.`);
+        a.resources.layOnHands = pool - 5;
+        removeCondition(t, "poisoned");
+        log.push(entry("combat", `🤲 ${a.name} purges the poison from ${t.name}.`, a.id));
+      } else {
+        const amt = Math.max(0, Math.min(pool, Math.floor(cmd.amount || 0), t.maxHp - Math.max(0, t.hp)));
+        if (amt <= 0) return fail(pool <= 0 ? "Your Lay On Hands pool is empty." : `${t.name} doesn't need healing.`);
+        a.resources.layOnHands = pool - amt;
+        heal(t, amt, log, "Lay On Hands");
+      }
+      b.bonusAction = false;
+      break;
+    }
+    case "martialArts": {
+      if (!a.features.includes("martialArts")) return fail("You don't know Martial Arts.");
+      if (!b.bonusAction) return fail("No bonus action remaining.");
+      const unarmed = a.attacks.find((x) => x.id === "unarmed");
+      const t = target(cmd.targetId);
+      if (!unarmed || !t || isDown(t) || !hostile(a, t)) return fail("Choose an enemy to strike.");
+      if (dist(a.pos, t.pos) > unarmed.reach) return fail(`${t.name} is out of reach.`);
+      b.bonusAction = false;
+      weaponStrike(enc, rng, a, t, unarmed, "melee", log, { label: "Martial Arts (bonus strike)" });
+      break;
+    }
+    case "flurryOfBlows": {
+      if (!a.features.includes("monksFocus")) return fail("Flurry of Blows needs Monk's Focus (level 2).");
+      if (!b.bonusAction) return fail("No bonus action remaining.");
+      if ((a.resources.focus ?? 0) < 1) return fail("No Focus Points left.");
+      const unarmed = a.attacks.find((x) => x.id === "unarmed");
+      const ids = cmd.targetIds.length ? cmd.targetIds : [];
+      const first = ids.map((id) => target(id)).find((x) => x && !isDown(x) && hostile(a, x) && dist(a.pos, x.pos) <= 5);
+      if (!unarmed || !first) return fail("Choose an enemy within reach.");
+      a.resources.focus--;
+      b.bonusAction = false;
+      log.push(entry("combat", `🥋 ${a.name} unleashes a Flurry of Blows!`, a.id));
+      for (let i = 0; i < 2; i++) {
+        let t = target(ids[i] ?? ids[0]);
+        if (!t || isDown(t) || dist(a.pos, t.pos) > 5) t = enc.combatants.find((x) => hostile(a, x) && !isDown(x) && dist(a.pos, x.pos) <= 5);
+        if (!t) break;
+        const res = weaponStrike(enc, rng, a, t, unarmed, "melee", log, { label: `Flurry strike ${i + 1}` });
+        if (res.hit && !t.dead && a.features.includes("openHandTechnique") && cmd.technique) {
+          const dc = featureDc(a, "wis");
+          if (cmd.technique === "addle") { t.effects.push({ id: `addle-${t.id}`, name: "Addled", source: a.id, kind: "noReactions", expires: "startOfOwnTurn" }); log.push(entry("combat", `${t.name} is addled and can't make Opportunity Attacks.`, a.id)); }
+          if (cmd.technique === "push" && !makeSave(enc, rng, t, "str", dc, log) && t.size !== "huge" && t.size !== "gargantuan") pushAway(enc, a.pos, t, 15, log);
+          if (cmd.technique === "topple" && !makeSave(enc, rng, t, "dex", dc, log) && addCondition(t, "prone")) log.push(entry("combat", `${t.name} is knocked Prone!`, a.id));
+        }
+      }
+      break;
+    }
+    case "patientDefense":
+    case "stepOfTheWind": {
+      if (!a.features.includes("monksFocus")) return fail("This needs Monk's Focus (level 2).");
+      if (!b.bonusAction) return fail("No bonus action remaining.");
+      if (cmd.focus) {
+        if ((a.resources.focus ?? 0) < 1) return fail("No Focus Points left.");
+        a.resources.focus--;
+      }
+      b.bonusAction = false;
+      if (cmd.type === "patientDefense") {
+        b.disengaged = true;
+        if (cmd.focus) a.effects.push({ id: `dodge-${a.id}`, name: "Dodging", source: a.id, kind: "dodge", expires: "startOfOwnTurn" });
+        log.push(entry("combat", `${a.name} uses Patient Defense (${cmd.focus ? "Disengage + Dodge" : "Disengage"}).`, a.id));
+      } else {
+        b.movement += effectiveSpeed(a);
+        if (cmd.focus) b.disengaged = true;
+        log.push(entry("combat", `${a.name} uses Step of the Wind (${cmd.focus ? "Dash + Disengage" : "Dash"}).`, a.id));
+      }
+      break;
+    }
+    case "stunningStrike": {
+      if (!a.features.includes("stunningStrike")) return fail("You don't know Stunning Strike.");
+      if (b.stunningUsed) return fail("Stunning Strike can be used once per turn.");
+      if ((a.resources.focus ?? 0) < 1) return fail("No Focus Points left.");
+      const hitRec = (b.meleeHits ?? []).find((h) => h.targetId === cmd.targetId);
+      const t = target(cmd.targetId);
+      if (!hitRec || !t || t.dead) return fail("Use Stunning Strike right after hitting that creature with a monk weapon or unarmed strike.");
+      a.resources.focus--;
+      b.stunningUsed = true;
+      log.push(entry("combat", `🥋 ${a.name} strikes a pressure point: Stunning Strike!`, a.id));
+      if (!makeSave(enc, rng, t, "con", featureDc(a, "wis"), log)) {
+        if (addCondition(t, "stunned")) {
+          t.effects.push({ id: `stun-${t.id}`, name: "Stunned", source: a.id, kind: "stunnedBy", condition: "stunned", expires: "startOfSourceTurn" });
+          log.push(entry("combat", `💫 ${t.name} is Stunned!`, a.id));
+        }
+      } else {
+        t.effects.push({ id: `stunslow-${t.id}`, name: "Reeling", source: a.id, kind: "slowed", amount: Math.floor(t.speed / 2), expires: "startOfSourceTurn" });
+        t.effects.push({ id: `stunadv-${t.id}`, name: "Reeling", source: a.id, kind: "advantageNextAttackAgainst", expires: "startOfSourceTurn" });
+        log.push(entry("combat", `${t.name} reels: its speed is halved and the next attack against it has advantage.`, a.id));
+      }
+      break;
+    }
+    case "bardicInspiration": {
+      if (!a.features.includes("bardicInspiration")) return fail("You can't give Bardic Inspiration.");
+      if (!b.bonusAction) return fail("No bonus action remaining.");
+      if ((a.resources.bardicInspiration ?? 0) <= 0) return fail("No Bardic Inspiration left.");
+      const t = target(cmd.targetId);
+      if (!t || t.id === a.id || t.dead || hostile(a, t)) return fail("Inspire another ally.");
+      if (dist(a.pos, t.pos) > 60) return fail("The ally must be within 60 ft.");
+      if (t.effects.some((e) => e.kind === "inspired")) return fail(`${t.name} is already inspired.`);
+      a.resources.bardicInspiration--;
+      b.bonusAction = false;
+      t.effects.push({ id: `insp-${t.id}`, name: `Bardic Inspiration (d${bardicDie(a.level)})`, source: a.id, kind: "inspired", amount: bardicDie(a.level), expires: "never" });
+      log.push(entry("combat", `🎵 ${a.name} inspires ${t.name} (d${bardicDie(a.level)}).`, a.id));
+      break;
+    }
+    case "innateSorcery": {
+      if (!a.features.includes("innateSorcery")) return fail("You don't have Innate Sorcery.");
+      if (!b.bonusAction) return fail("No bonus action remaining.");
+      if ((a.resources.innateSorcery ?? 0) <= 0) return fail("Innate Sorcery is spent.");
+      if (a.effects.some((e) => e.kind === "innateSorcery")) return fail("Innate Sorcery is already active.");
+      a.resources.innateSorcery--;
+      b.bonusAction = false;
+      a.effects.push({ id: `innate-${a.id}`, name: "Innate Sorcery", source: a.id, kind: "innateSorcery", expires: "never" });
+      log.push(entry("combat", `🐉 ${a.name}'s draconic blood surges: Innate Sorcery! (+1 spell DC, advantage on spell attacks)`, a.id));
+      break;
+    }
+    case "fontOfMagic": {
+      if (!a.features.includes("fontOfMagic")) return fail("You don't have Font of Magic.");
+      const lvl = Math.floor(cmd.slotLevel);
+      if (cmd.mode === "createSlot") {
+        if (!b.bonusAction) return fail("Creating a spell slot takes a bonus action.");
+        const cost = SORCERY_SLOT_COST[lvl];
+        if (!cost || lvl > 5) return fail("You can create slots of level 1-5.");
+        if ((a.resources.sorceryPoints ?? 0) < cost) return fail(`A level ${lvl} slot costs ${cost} Sorcery Points.`);
+        while (a.spellSlots.length <= lvl) a.spellSlots.push(0);
+        while (a.spellSlotsUsed.length <= lvl) a.spellSlotsUsed.push(0);
+        a.resources.sorceryPoints -= cost;
+        a.spellSlotsUsed[lvl] = (a.spellSlotsUsed[lvl] ?? 0) - 1;
+        b.bonusAction = false;
+        log.push(entry("combat", `🐉 ${a.name} shapes ${cost} Sorcery Points into a level ${lvl} spell slot.`, a.id));
+      } else {
+        if ((a.spellSlots[lvl] ?? 0) - (a.spellSlotsUsed[lvl] ?? 0) <= 0) return fail(`No level ${lvl} slot to convert.`);
+        a.spellSlotsUsed[lvl] = (a.spellSlotsUsed[lvl] ?? 0) + 1;
+        a.resources.sorceryPoints = (a.resources.sorceryPoints ?? 0) + lvl;
+        log.push(entry("combat", `🐉 ${a.name} unravels a level ${lvl} slot into ${lvl} Sorcery Points.`, a.id));
+      }
+      break;
+    }
+    case "wildShape": {
+      if (!a.features.includes("wildShape")) return fail("You can't Wild Shape yet.");
+      if (!b.bonusAction) return fail("No bonus action remaining.");
+      if (a.wildShape) return fail("Already in beast form.");
+      if ((a.resources.wildShape ?? 0) <= 0) return fail("No Wild Shape uses left.");
+      a.resources.wildShape--;
+      b.bonusAction = false;
+      const f = WILD_SHAPE_FORM;
+      a.wildShape = { ac: a.ac, abilities: { ...a.abilities }, speed: a.speed, attacks: a.attacks, size: a.size };
+      a.ac = f.ac; a.speed = f.speed; a.size = "medium";
+      a.abilities = { ...a.abilities, str: f.str, dex: f.dex, con: f.con };
+      a.attacks = [{ ...f.attack }];
+      a.tempHp = Math.max(a.tempHp, a.level);
+      a.effects.push({ id: `ws-${a.id}`, name: `Wild Shape (${f.name})`, source: a.id, kind: "wildShape", expires: "never" });
+      log.push(entry("combat", `🐺 ${a.name} shifts into a ${f.name}! (+${a.level} temp HP)`, a.id));
+      break;
+    }
+    case "revertShape": {
+      if (!a.wildShape) return fail("You're in your true form.");
+      if (!b.bonusAction) return fail("Reverting takes a bonus action.");
+      b.bonusAction = false;
+      revertWildShape(a, log);
+      break;
+    }
+    case "landsAid": {
+      if (!a.features.includes("landsAid")) return fail("You don't have Land's Aid.");
+      const e = needAction(); if (e) return fail(e);
+      if ((a.resources.wildShape ?? 0) <= 0) return fail("Land's Aid expends a Wild Shape use; none left.");
+      if (dist(a.pos, cmd.point) > 60 || !inBounds(enc.map, cmd.point)) return fail("Choose a point within 60 ft.");
+      a.resources.wildShape--;
+      b.action = false;
+      const tiles = areaTiles(enc.map, "sphere", 10, a.pos, cmd.point);
+      const inArea = enc.combatants.filter((c) => !c.dead && !c.fled && tiles.some((p) => samePoint(p, c.pos)));
+      log.push(entry("combat", `🌱 ${a.name} calls on the land: thorny growth erupts!`, a.id, { tiles }));
+      const r = roll(rng, "2d6").total;
+      for (const t of inArea.filter((c) => hostile(a, c))) {
+        const ok = makeSave(enc, rng, t, "con", spellDc(a), log);
+        const amt = ok ? Math.floor(r / 2) : r;
+        log.push(entry("combat", `💥 ${t.name} takes ${amt} necrotic.`, a.id));
+        applyDamage(enc, rng, t, amt, "necrotic", log, { sourceId: a.id });
+      }
+      const ht = cmd.healTargetId ? target(cmd.healTargetId) : inArea.filter((c) => !hostile(a, c)).sort((x, y) => x.hp / x.maxHp - y.hp / y.maxHp)[0];
+      if (ht && !ht.dead && !hostile(a, ht) && inArea.includes(ht)) heal(ht, roll(rng, "2d6").total, log, "Land's Aid");
+      break;
+    }
+    case "moveMoonbeam": {
+      const mb = a.effects.find((e) => e.kind === "moonbeam" && e.source === a.id);
+      if (!mb?.point) return fail("You have no Moonbeam to move.");
+      if (!b.bonusAction) return fail("Moving the beam takes a bonus action.");
+      if (dist(mb.point, cmd.point) > 60 || !inBounds(enc.map, cmd.point)) return fail("The beam moves up to 60 ft.");
+      mb.point = cmd.point;
+      b.bonusAction = false;
+      log.push(entry("combat", `🌕 ${a.name} moves the moonbeam to (${cmd.point.x},${cmd.point.y}).`, a.id));
       break;
     }
     case "cast": {
@@ -1055,11 +1465,29 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
   const spiritualRepeat = sp.id === "spiritualWeapon" && a.effects.some((e) => e.kind === "spiritualWeapon" && e.source === a.id);
   if (!a.spells.includes(sp.id)) return `${a.name} doesn't know ${sp.name}.`;
   if (sp.castingTime === "reaction") return `${sp.name} is cast automatically as a reaction.`;
+  if (sp.effect?.kind === "smite") return `${sp.name} is cast right after you hit with a melee attack — use Smite.`;
   if (a.effects.some((e) => e.kind === "rage")) return "You can't cast spells while raging.";
-  if (sp.castingTime === "action" && !b.action) return "No action remaining.";
-  if (sp.castingTime === "bonus" && !b.bonusAction) return "No bonus action remaining.";
-  // 2024: after casting a spell with a bonus action you can't cast another spell with a slot that turn
-  if (sp.level > 0 && b.bonusSpellCast && !spiritualRepeat) return "You already cast a bonus-action spell this turn; only cantrips remain.";
+  if (a.wildShape) return "You can't cast spells in Wild Shape.";
+  // Sorcerer Metamagic
+  const meta = cmd.metamagic;
+  let castTime = sp.castingTime;
+  let metaCost = 0;
+  if (meta) {
+    if (!a.features.includes("metamagic")) return "You don't know Metamagic.";
+    if (meta === "quickened") {
+      if (sp.castingTime !== "action") return "Quickened Spell changes an action casting time to a bonus action.";
+      metaCost = 2; castTime = "bonus";
+    } else {
+      const single = sp.targeting.kind === "creature" && (sp.targeting.count ?? 1) === 1 && sp.level >= 1 && sp.effect?.kind !== "eldritchBlast";
+      if (!single) return "Twinned Spell works on leveled spells that target a single creature.";
+      metaCost = 1;
+    }
+    if ((a.resources.sorceryPoints ?? 0) < metaCost) return `Not enough Sorcery Points (${metaCost} needed).`;
+  }
+  if (castTime === "action" && !b.action) return "No action remaining.";
+  if (castTime === "bonus" && !b.bonusAction) return "No bonus action remaining.";
+  // 2024: one spell with a spell slot per turn
+  if (sp.level > 0 && b.leveledSpellCast && !spiritualRepeat) return "You've already cast a spell with a spell slot this turn; only cantrips remain.";
   let slot = 0;
   if (sp.level > 0 && !spiritualRepeat && !freeMark && !freeInitiate) {
     const want = Math.max(sp.level, cmd.slotLevel ?? sp.level);
@@ -1070,8 +1498,11 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
   const tg = sp.targeting;
   if (tg.kind === "creature") {
     if (!targets.length && !spiritualRepeat) return "Choose a target.";
-    const max = (tg.count ?? 1) + (sp.effect?.kind === "magicMissile" || sp.effect?.kind === "scorchingRay" ? 10 : 0);
+    const beams = sp.effect?.kind === "eldritchBlast" ? eldritchBeams(a.level) : 0;
+    const max = (tg.count ?? 1) + (sp.effect?.kind === "magicMissile" || sp.effect?.kind === "scorchingRay" ? 10 : 0) + (meta === "twinned" ? 1 : 0) + Math.max(0, beams - 1);
     if (targets.length > max) return `Too many targets (max ${tg.count ?? 1}).`;
+    if (meta === "twinned" && (targets.length !== 2 || targets[0].id === targets[1].id)) return "Twinned Spell needs two different targets.";
+    if (sp.id === "hex" && targets.some((t) => !hostile(a, t))) return "Hex a foe.";
     for (const t of targets) {
       if (dist(a.pos, t.pos) > tg.range) return `${t.name} is out of range (${tg.range} ft).`;
       if (!hasLineOfSight(enc.map, a.pos, t.pos)) return `No line of sight to ${t.name}.`;
@@ -1098,8 +1529,10 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
     else if (freeInitiate && !hasSlot(a, 1)) a.resources.magicInitiate--;
     else slot = spendSlot(a, Math.max(sp.level, cmd.slotLevel ?? sp.level));
   }
-  if (sp.castingTime === "action") b.action = false;
+  if (castTime === "action") b.action = false;
   else { b.bonusAction = false; if (sp.level > 0) b.bonusSpellCast = true; }
+  if (slot > 0) b.leveledSpellCast = true;
+  if (metaCost) { a.resources.sorceryPoints -= metaCost; log.push(entry("combat", `🐉 ${a.name} uses ${meta === "quickened" ? "Quickened" : "Twinned"} Spell (${metaCost} SP).`, a.id)); }
   const upcast = Math.max(0, slot - sp.level);
   a.effects = a.effects.filter((e) => e.kind !== "hidden");
   if (sp.concentration && !spiritualRepeat) startConcentration(enc, a, sp.id, log);
@@ -1166,6 +1599,36 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
     return null;
   }
 
+  if (eff?.kind === "eldritchBlast") {
+    const beams = eldritchBeams(a.level);
+    const cha = abilityMod(a, "cha");
+    for (let i = 0; i < beams; i++) {
+      const t = targets[i % targets.length];
+      if (!t || t.dead) continue;
+      const res = rollAttack(enc, rng, { attacker: a, target: t, toHit: spellAttackBonus(a), kind: "ranged", reach: 0, range: [120, 120], isSpell: true }, log, beams > 1 ? `Eldritch Blast (beam ${i + 1})` : "Eldritch Blast");
+      if (!res.hit) continue;
+      const r = roll(rng, "1d10", { crit: res.crit }).total + (a.features.includes("agonizingBlast") ? cha : 0);
+      log.push(entry("combat", `💥 ${t.name} takes ${r} force.`, a.id));
+      applyDamage(enc, rng, t, r, "force", log, { crit: res.crit, sourceId: a.id, attack: true });
+      hexDamage(enc, rng, a, t, res.crit, log);
+      if (!t.dead && a.features.includes("repellingBlast") && t.size !== "huge" && t.size !== "gargantuan") pushAway(enc, a.pos, t, 10, log);
+    }
+    return null;
+  }
+  if (eff?.kind === "armorOfAgathys") {
+    const amt = 5 * Math.max(1, slot || sp.level);
+    a.tempHp = Math.max(a.tempHp, amt);
+    a.effects = a.effects.filter((e) => e.kind !== "armorOfAgathys");
+    a.effects.push({ id: `aoa-${a.id}`, name: "Armor of Agathys", source: a.id, kind: "armorOfAgathys", amount: amt, expires: "never" });
+    log.push(entry("combat", `❄ Spectral frost armours ${a.name} (${amt} temp HP).`, a.id));
+    return null;
+  }
+  if (eff?.kind === "shillelagh") {
+    a.effects = a.effects.filter((e) => e.kind !== "shillelagh");
+    a.effects.push({ id: `shil-${a.id}`, name: "Shillelagh", source: a.id, kind: "shillelagh", expires: "never" });
+    log.push(entry("combat", `🌿 ${a.name}'s staff thrums with nature's power.`, a.id));
+    return null;
+  }
   // Area spells
   if (tg.kind === "area" && cmd.point) {
     const tiles = areaTiles(enc.map, tg.shape, tg.size, a.pos, cmd.point);
@@ -1188,6 +1651,23 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
         if (amt > 0) { log.push(entry("combat", `💥 ${t.name} takes ${amt} ${sp.damage.type}.`, a.id)); applyDamage(enc, rng, t, amt, sp.damage.type, log, { sourceId: a.id }); }
       }
       if (!ok && eff?.kind === "push" && !t.dead) pushAway(enc, a.pos, t, eff.feet, log);
+      if (!ok && !t.dead && eff?.kind === "faerieFire") {
+        removeCondition(t, "invisible");
+        t.effects.push({ id: `ff-${t.id}`, name: "Faerie Fire", source: a.id, kind: "faerieFire", expires: "concentration", concentration: true });
+        log.push(entry("combat", `✨ ${t.name} is outlined in faerie fire.`, a.id));
+      }
+      if (!ok && !t.dead && eff?.kind === "entangle" && addCondition(t, "restrained")) {
+        t.effects.push({ id: `ent-${t.id}`, name: "Entangle", source: a.id, kind: "heldBySpell", condition: "restrained", saveAbility: "str", saveDc: spellDc(a), expires: "concentration", concentration: true });
+        log.push(entry("combat", `🌿 ${t.name} is restrained by grasping weeds!`, a.id));
+      }
+      if (!ok && !t.dead && eff?.kind === "pattern" && addCondition(t, "charmed")) {
+        addCondition(t, "incapacitated");
+        t.effects.push({ id: `hp-${t.id}`, name: "Hypnotic Pattern", source: a.id, kind: "pattern", expires: "concentration", concentration: true });
+        log.push(entry("combat", `🌀 ${t.name} is entranced by the pattern!`, a.id));
+      }
+    }
+    if (eff?.kind === "moonbeam") {
+      a.effects.push({ id: `mb-${a.id}`, name: "Moonbeam", source: a.id, kind: "moonbeam", point: cmd.point, dice, saveDc: spellDc(a), expires: "concentration", concentration: true });
     }
     return null;
   }
@@ -1208,19 +1688,23 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
     if (eff?.kind === "aid") { t.maxHp += eff.amount + 5 * upcast; t.hp += eff.amount + 5 * upcast; log.push(entry("combat", `${t.name} is bolstered (+${eff.amount + 5 * upcast} HP).`, a.id)); continue; }
     if (eff?.kind === "mageArmor") { t.ac = Math.max(t.ac, 13 + abilityMod(t, "dex")); log.push(entry("combat", `${t.name} is wrapped in a shimmering ward (AC ${t.ac}).`, a.id)); continue; }
     if (eff?.kind === "guidance") { t.effects.push({ id: `guid-${t.id}`, name: "Guidance", source: a.id, kind: "guidance", expires: "concentration", concentration: true }); log.push(entry("combat", `${t.name} receives guidance.`, a.id)); continue; }
+    if (eff?.kind === "hex") { t.effects.push({ id: `hex-${t.id}`, name: "Hexed", source: a.id, kind: "hexed", targetId: t.id, expires: "concentration", concentration: true }); log.push(entry("combat", `🕯 ${a.name} hexes ${t.name}.`, a.id)); continue; }
     if (eff?.kind === "huntersMark") { t.effects.push({ id: `hm-${t.id}`, name: "Hunter's Mark", source: a.id, kind: "huntersMark", targetId: t.id, expires: "concentration", concentration: true }); log.push(entry("combat", `${a.name} marks ${t.name} as their quarry.`, a.id)); continue; }
     if (sp.attack) {
       const res = rollAttack(enc, rng, { attacker: a, target: t, toHit: spellAttackBonus(a), kind: sp.attack, reach: tg.kind === "creature" ? tg.range : 5, isSpell: true }, log, sp.name);
       if (sp.damage) {
         const dice = dmgDice(sp.damage.dice);
+        const dtype = eff?.kind === "chromaticOrb" ? chromaticType(cmd.damageType) : sp.damage.type;
         if (res.hit || potent) {
           const r = roll(rng, dice, { crit: res.crit });
           let amt = r.total + (sp.damage.addMod ? sMod : 0);
           if (!res.hit) amt = Math.floor(amt / 2);
-          log.push(entry("combat", `💥 ${t.name} takes ${amt} ${sp.damage.type}${!res.hit ? " (Potent Cantrip)" : ""}.`, a.id));
-          applyDamage(enc, rng, t, amt, sp.damage.type, log, { crit: res.crit, sourceId: a.id });
+          log.push(entry("combat", `💥 ${t.name} takes ${amt} ${dtype}${!res.hit ? " (Potent Cantrip)" : ""}.`, a.id));
+          applyDamage(enc, rng, t, amt, dtype, log, { crit: res.crit, sourceId: a.id, attack: true, melee: sp.attack === "melee" });
+          if (res.hit) hexDamage(enc, rng, a, t, res.crit, log);
         }
       }
+      if (res.hit && !t.dead && eff?.kind === "noHeal") t.effects.push({ id: `ct-${t.id}`, name: "Chilled to the Bone", source: a.id, kind: "noHeal", expires: "startOfSourceTurn" });
       if (res.hit && !t.dead) {
         if (eff?.kind === "slow") t.effects.push({ id: `rof-${t.id}`, name: "Chilled", source: a.id, kind: "slowed", amount: eff.feet, expires: "startOfSourceTurn" });
         if (eff?.kind === "noReactions") t.effects.push({ id: `sg-${t.id}`, name: "Shocked", source: a.id, kind: "noReactions", expires: "startOfOwnTurn" });
@@ -1236,6 +1720,10 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
         const r = roll(rng, dmgDice(sp.damage.dice));
         let amt = ok ? (sp.save.half || potent ? Math.floor(r.total / 2) : 0) : r.total;
         if (amt > 0) { log.push(entry("combat", `💥 ${t.name} takes ${amt} ${sp.damage.type}.`, a.id)); applyDamage(enc, rng, t, amt, sp.damage.type, log, { sourceId: a.id }); }
+      }
+      if (!ok && !t.dead && eff?.kind === "mockery") t.effects.push({ id: `vm-${t.id}`, name: "Mocked", source: a.id, kind: "mockery", expires: "endOfOwnTurn" });
+      if (!ok && !t.dead && eff?.kind === "dissonantWhispers") {
+        if (targetHasReaction(enc, t)) { useReaction(enc, t); log.push(entry("combat", `${t.name} flees from the whispers!`, t.id)); pushAway(enc, a.pos, t, effectiveSpeed(t), log); }
       }
       if (!ok && eff?.kind === "condition" && !t.dead) {
         if (addCondition(t, eff.condition)) {
@@ -1274,3 +1762,19 @@ export function loadItems(c: Combatant, inventory: { itemId: string; qty: number
 export function addFightingStyleFeature(c: Combatant, style?: string) {
   if (style) c.features.push(`style:${style}`);
 }
+
+export function eldritchBeams(level: number): number {
+  return level >= 17 ? 4 : level >= 11 ? 3 : level >= 5 ? 2 : 1;
+}
+
+const CHROMATIC: DamageType[] = ["acid", "cold", "fire", "lightning", "poison", "thunder"];
+function chromaticType(t?: DamageType): DamageType {
+  return t && CHROMATIC.includes(t) ? t : "fire";
+}
+export { CHROMATIC as CHROMATIC_TYPES };
+
+/** Wolf form for Druid Wild Shape (2024: beast statistics, keep your HP, gain temp HP equal to druid level). */
+export const WILD_SHAPE_FORM = {
+  name: "Wolf", ac: 12, speed: 40, str: 14, dex: 15, con: 12,
+  attack: { id: "bite", name: "Bite (Wolf)", kind: "melee" as const, toHit: 4, damage: "1d6", damageBonus: 2, damageType: "piercing" as DamageType, reach: 5 },
+};

@@ -2,7 +2,7 @@ import { Portrait } from "../components/art/Portrait";
 import { useState } from "react";
 import type { Ability, AbilityScores, CharacterSheet } from "@tavern/engine";
 import {
-  ABILITIES, ABILITY_NAMES, ARMOR, BACKGROUNDS, CLASSES, FEATS, FULL_CASTER_SLOTS, GEAR, HALF_CASTER_SLOTS, SKILL_ABILITY, SKILL_NAMES, SPECIES, SPELLS, WEAPONS,
+  ABILITIES, ABILITY_NAMES, ARMOR, BACKGROUNDS, CLASSES, FEATS, FULL_CASTER_SLOTS, GEAR, HALF_CASTER_SLOTS, PACT_SLOTS, SKILL_ABILITY, SKILL_NAMES, SPECIES, SPELLS, WEAPONS,
   armorClass, canLevelUp, fmtMod, itemName, mod, profBonus, resourcesRemaining, saveBonus, skillBonus, spellSaveDc, weaponAttacks,
 } from "@tavern/engine";
 import type { Skill } from "@tavern/engine";
@@ -203,7 +203,7 @@ export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
   );
 }
 
-function LevelUpDialog({ sheet, onClose, onSubmit }: { sheet: CharacterSheet; onClose: () => void; onSubmit: (b: { asi?: Partial<AbilityScores>; newSpells?: string[]; newCantrips?: string[] }) => void }) {
+function LevelUpDialog({ sheet, onClose, onSubmit }: { sheet: CharacterSheet; onClose: () => void; onSubmit: (b: { asi?: Partial<AbilityScores>; newSpells?: string[]; newCantrips?: string[]; fightingStyle?: CharacterSheet["fightingStyle"]; expertise?: Skill[] }) => void }) {
   const cls = CLASSES[sheet.classId];
   const next = sheet.level + 1;
   const [asiMode, setAsiMode] = useState<"2" | "11">("2");
@@ -211,7 +211,11 @@ function LevelUpDialog({ sheet, onClose, onSubmit }: { sheet: CharacterSheet; on
   const [a2, setA2] = useState<Ability>("con");
   const [spells, setSpells] = useState<string[]>([]);
   const [cantrips, setCantrips] = useState<string[]>([]);
-  const table = cls.spellcasting?.kind === "half" ? HALF_CASTER_SLOTS : FULL_CASTER_SLOTS;
+  const table = cls.spellcasting?.kind === "half" ? HALF_CASTER_SLOTS : cls.spellcasting?.kind === "pact" ? PACT_SLOTS : FULL_CASTER_SLOTS;
+  const [style, setStyle] = useState<CharacterSheet["fightingStyle"]>("defense");
+  const [expertise, setExpertise] = useState<Skill[]>([]);
+  const wantsStyle = next === 2 && (sheet.classId === "paladin" || sheet.classId === "ranger");
+  const wantsExpertise = next === 2 && sheet.classId === "bard";
   const maxSpellLevel = cls.spellcasting ? (table[next]?.length ?? 1) - 1 : 0;
   const prepNow = sheet.spellsKnown.filter((s) => SPELLS[s]?.classes.includes(sheet.classId)).length;
   const prepWant = cls.spellcasting?.prepared[next] ?? 0;
@@ -239,6 +243,25 @@ function LevelUpDialog({ sheet, onClose, onSubmit }: { sheet: CharacterSheet; on
           </div>
         </>
       )}
+      {wantsStyle && (
+        <>
+          <h3>Fighting Style</h3>
+          <select value={style} onChange={(e) => setStyle(e.target.value as CharacterSheet["fightingStyle"])}>
+            <option value="defense">Defense (+1 AC in armor)</option>
+            <option value="dueling">Dueling (+2 damage, one-handed)</option>
+            <option value="greatWeapon">Great Weapon Fighting</option>
+            <option value="archery">Archery (+2 ranged attack)</option>
+          </select>
+        </>
+      )}
+      {wantsExpertise && (
+        <>
+          <h3>Expertise ({expertise.length}/2)</h3>
+          <div className="chips">{sheet.skillProficiencies.filter((k) => !sheet.expertise.includes(k)).map((k) => (
+            <button key={k} className={`chip ${expertise.includes(k) ? "sel" : ""}`} onClick={() => setExpertise(expertise.includes(k) ? expertise.filter((x) => x !== k) : expertise.length < 2 ? [...expertise, k] : expertise)}>{SKILL_NAMES[k]}</button>
+          ))}</div>
+        </>
+      )}
       {newCantripCount > 0 && (
         <>
           <h3>New cantrip ({cantrips.length}/{newCantripCount})</h3>
@@ -258,6 +281,8 @@ function LevelUpDialog({ sheet, onClose, onSubmit }: { sheet: CharacterSheet; on
           asi: next === 4 ? (asiMode === "2" ? { [a1]: 2 } : { [a1]: 1, [a2]: 1 }) : undefined,
           newSpells: spells.length ? spells : undefined,
           newCantrips: cantrips.length ? cantrips : undefined,
+          fightingStyle: wantsStyle ? style : undefined,
+          expertise: wantsExpertise && expertise.length ? expertise : undefined,
         })}>Level up</button>
       </div>
     </Modal>

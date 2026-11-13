@@ -81,7 +81,7 @@ export function CharacterCreate({ ctx }: { ctx: AppCtx }) {
   const classPool = cls.skillOptions.filter((s) => !bg.skills.includes(s));
   const allChosen = [...new Set([...bg.skills, ...classSkills, ...extraSkills])];
 
-  const weaponPool = Object.values(WEAPONS).filter((w) => cls.weapons === "martial" || w.category === "simple" || (cls.weapons === "rogue" && (w.properties.includes("finesse") || w.properties.includes("light"))));
+  const weaponPool = Object.values(WEAPONS).filter((w) => cls.weapons === "martial" || w.category === "simple" || (cls.weapons === "rogue" && (w.properties.includes("finesse") || w.properties.includes("light"))) || (cls.weapons === "monk" && w.kind === "melee" && w.properties.includes("light")));
   const casterSpells = cls.spellcasting ? Object.values(SPELLS).filter((s) => s.classes.includes(classId)) : [];
   const nCantrips = cls.spellcasting?.cantrips[1] ?? 0;
   const nSpells = cls.spellcasting?.prepared[1] ?? 0;

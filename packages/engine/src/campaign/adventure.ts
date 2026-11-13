@@ -280,6 +280,12 @@ export function applyEffects(adv: AdventureState, ctx: AdventureContext, effects
       case "unlockScenario":
         if (!ctx.campaign.unlockedScenarios.includes(e.scenarioId)) { ctx.campaign.unlockedScenarios.push(e.scenarioId); adv.log.push(logEntry("system", `🗺 A new location is revealed on the campaign map.`)); }
         break;
+      case "unlockClass":
+        if (!ctx.campaign.unlockedClasses.includes(e.classId)) {
+          ctx.campaign.unlockedClasses.push(e.classId);
+          adv.log.push(logEntry("system", `🗝 A new path opens: the ${CLASSES[e.classId]?.name ?? e.classId} class can now be chosen at the Broken Lantern.`));
+        }
+        break;
       case "questCounter":
         if (e.counter.startsWith("kill") || e.counter === "scenarioDone") break; // tracked by the engine itself
         for (const s of targetsFor(e.counter === "secretsFound" && actorId ? "chooser" : "all")) bumpQuest(s, e.counter, e.amount);

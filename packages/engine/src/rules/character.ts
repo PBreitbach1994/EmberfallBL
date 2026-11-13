@@ -1,6 +1,6 @@
 // Character creation, derived statistics, levelling and rests.
 import { BACKGROUNDS, FEATS, SKILL_ABILITY, SPECIES } from "../data/origins.js";
-import { CLASSES, FULL_CASTER_SLOTS, HALF_CASTER_SLOTS, MAX_LEVEL, RAGE_USES, XP_THRESHOLDS } from "../data/classes.js";
+import { CLASSES, FULL_CASTER_SLOTS, HALF_CASTER_SLOTS, PACT_SLOTS, MAX_LEVEL, RAGE_USES, XP_THRESHOLDS, martialArtsDie } from "../data/classes.js";
 import { ARMOR, WEAPONS } from "../data/equipment.js";
 import { SPELLS } from "../data/spells.js";
 import { mod, profForLevel, Rng, roll } from "../dice.js";
@@ -121,6 +121,11 @@ export function createCharacter(input: CharacterCreationInput, id: string): Char
       cleric: { c: ["sacredFlame", "guidance", "spareTheDying"], s: ["cureWounds", "healingWord", "bless", "guidingBolt"] },
       wizard: { c: ["fireBolt", "rayOfFrost", "mageHand"], s: ["magicMissile", "shield", "burningHands", "sleep"] },
       ranger: { c: [], s: ["cureWounds", "huntersMark"] },
+      paladin: { c: [], s: ["divineSmite", "cureWounds"] },
+      bard: { c: ["viciousMockery", "light"], s: ["healingWord", "dissonantWhispers", "faerieFire", "thunderwave"] },
+      druid: { c: ["produceFlame", "shillelagh", "guidance"], s: ["cureWounds", "healingWord", "entangle", "faerieFire"] },
+      sorcerer: { c: ["fireBolt", "rayOfFrost", "shockingGrasp", "mageHand"], s: ["chromaticOrb", "shield"] },
+      warlock: { c: ["eldritchBlast", "chillTouch"], s: ["hex", "armorOfAgathys"] },
     };
     const d = defaults[input.classId];
     for (const c of d?.c ?? []) if (cantrips.length < nC && !cantrips.includes(c)) cantrips.push(c);
@@ -159,6 +164,7 @@ export function hpForLevel(sheet: CharacterSheet): number {
   let hp = cls.hitDie + conMod + (sheet.level - 1) * (cls.hitDie / 2 + 1 + conMod);
   if (sheet.species === "dwarf") hp += sheet.level;
   if (sheet.feats.includes("tough")) hp += 2 * sheet.level;
+  if (sheet.classId === "sorcerer" && sheet.level >= 3) hp += sheet.level; // Draconic Resilience
   return Math.max(1, hp);
 }
 
@@ -167,9 +173,11 @@ export function recalcDerived(sheet: CharacterSheet): void {
   sheet.maxHp = hpForLevel(sheet);
   sheet.hp = Math.min(sheet.hp, sheet.maxHp);
   if (cls.spellcasting) {
-    const table = cls.spellcasting.kind === "full" ? FULL_CASTER_SLOTS : HALF_CASTER_SLOTS;
+    const table = cls.spellcasting.kind === "full" ? FULL_CASTER_SLOTS : cls.spellcasting.kind === "pact" ? PACT_SLOTS : HALF_CASTER_SLOTS;
     sheet.spellSlots = [...(table[sheet.level] ?? [])];
     while (sheet.spellSlotsUsed.length < sheet.spellSlots.length) sheet.spellSlotsUsed.push(0);
+    // pact slots change level as the warlock levels: never carry "used" counts into slots that no longer exist
+    if (cls.spellcasting.kind === "pact") sheet.spellSlotsUsed = sheet.spellSlotsUsed.map((u, i) => Math.min(Math.max(0, u), sheet.spellSlots[i] ?? 0));
   }
   if (sheet.level >= 3 && !sheet.subclass) sheet.subclass = cls.subclass.id;
 }
@@ -182,6 +190,7 @@ export function skillBonus(sheet: CharacterSheet, skill: Skill): number {
   const pb = profBonus(sheet);
   if (sheet.skillProficiencies.includes(skill)) b += pb;
   if (sheet.expertise.includes(skill)) b += pb;
+  if (!sheet.skillProficiencies.includes(skill) && sheet.classId === "bard" && sheet.level >= 2) b += Math.floor(pb / 2); // Jack of All Trades
   return b;
 }
 
@@ -205,6 +214,10 @@ export function armorClass(sheet: CharacterSheet, mageArmor = false): number {
     ac = body.baseAc + cap;
   } else if (sheet.classId === "barbarian") {
     ac = 10 + dex + mod(sheet.abilities.con);
+  } else if (sheet.classId === "monk" && !shield) {
+    ac = 10 + dex + mod(sheet.abilities.wis);
+  } else if (sheet.classId === "sorcerer" && sheet.level >= 3) {
+    ac = Math.max(10 + dex + mod(sheet.abilities.cha), mageArmor ? 13 + dex : 0);
   } else if (mageArmor) {
     ac = 13 + dex;
   } else {
@@ -222,6 +235,8 @@ function proficientWith(sheet: CharacterSheet, weaponId: string): boolean {
   if (wpn.category === "simple") return true;
   if (cls.weapons === "martial") return true;
   if (cls.weapons === "rogue") return wpn.properties.includes("finesse") || wpn.properties.includes("light");
+  if (cls.weapons === "monk") return wpn.properties.includes("light") && wpn.kind === "melee";
+  if (sheet.classId === "warlock" && wpn.kind === "melee") return true; // Pact of the Blade
   if (sheet.classId === "cleric" && sheet.inventory.some((i) => i.itemId === "chainMail" || i.itemId === "warhammer")) return true; // Protector order
   return false;
 }
@@ -239,11 +254,16 @@ export function weaponAttacks(sheet: CharacterSheet): AttackOption[] {
     seen.add(inv.itemId);
     const w = WEAPONS[inv.itemId];
     const finesse = w.properties.includes("finesse");
-    const abilityMod = w.kind === "ranged" ? dex : finesse ? Math.max(str, dex) : str;
+    const cha = mod(sheet.abilities.cha);
+    const monkWeapon = sheet.classId === "monk" && w.kind === "melee" && (w.category === "simple" || w.properties.includes("light")) && !w.properties.includes("heavy") && !w.properties.includes("twoHanded");
+    const pactWeapon = sheet.classId === "warlock" && w.kind === "melee";
+    let abilityMod = w.kind === "ranged" ? dex : finesse || monkWeapon ? Math.max(str, dex) : str;
+    if (pactWeapon) abilityMod = Math.max(abilityMod, cha);
     let toHit = abilityMod + (proficientWith(sheet, w.id) ? pb : 0);
     let dmgBonus = abilityMod;
     let dice = w.damage;
     if (w.versatileDamage && !shield) dice = w.versatileDamage;
+    if (monkWeapon) dice = biggerDie(dice, martialArtsDie(sheet.level));
     if (w.kind === "ranged" && sheet.fightingStyle === "archery") toHit += 2;
     const oneHanded = !w.properties.includes("twoHanded") && w.kind === "melee";
     const onlyWeapon = equippedWeapons.filter((i) => WEAPONS[i.itemId]?.kind === "melee" && i.equipped).length <= 1;
@@ -254,10 +274,19 @@ export function weaponAttacks(sheet: CharacterSheet): AttackOption[] {
       reach: w.kind === "melee" ? (w.properties.includes("reach") ? 10 : 5) : 0, range: w.range, finesse, light: w.properties.includes("light"),
       heavy: w.properties.includes("heavy"), mastery, thrown: w.properties.includes("thrown"),
     });
+    if (monkWeapon) out[out.length - 1].finesse = true;
   }
   // Unarmed strike always available (2024: 1 + Str mod bludgeoning)
-  out.push({ id: "unarmed", name: "Unarmed Strike", kind: "melee", toHit: str + pb, damage: "1", damageBonus: str, damageType: "bludgeoning", reach: 5 });
+  if (sheet.classId === "monk") {
+    const m = Math.max(str, dex);
+    out.push({ id: "unarmed", name: "Unarmed Strike", kind: "melee", toHit: m + pb, damage: martialArtsDie(sheet.level), damageBonus: m, damageType: "bludgeoning", reach: 5, finesse: true });
+  } else out.push({ id: "unarmed", name: "Unarmed Strike", kind: "melee", toHit: str + pb, damage: "1", damageBonus: str, damageType: "bludgeoning", reach: 5 });
   return out;
+}
+
+function biggerDie(a: string, b: string): string {
+  const n = (x: string) => { const m = x.match(/^(\d+)d(\d+)$/); return m ? parseInt(m[1]) * (parseInt(m[2]) + 1) / 2 : 0; };
+  return n(b) > n(a) ? b : a;
 }
 
 export function spellSaveDc(sheet: { level: number; abilities: AbilityScores }, ability: Ability): number {
@@ -265,6 +294,7 @@ export function spellSaveDc(sheet: { level: number; abilities: AbilityScores }, 
 }
 
 export function spellAbility(classId: ClassId): Ability | undefined {
+  if (classId === "monk") return "wis";
   return CLASSES[classId].spellcasting?.ability ?? (classId === "fighter" || classId === "rogue" || classId === "barbarian" ? "int" : undefined);
 }
 
@@ -276,6 +306,12 @@ export function resourceMax(sheet: CharacterSheet): Record<string, number> {
   if (sheet.classId === "cleric" && sheet.level >= 2) r.channelDivinity = 2;
   if (sheet.classId === "ranger") r.favoredEnemy = 2;
   if (sheet.classId === "wizard") r.arcaneRecovery = 1;
+  if (sheet.classId === "paladin") { r.layOnHands = 5 * sheet.level; if (sheet.level >= 2) r.paladinsSmite = 1; if (sheet.level >= 3) r.channelDivinity = 2; }
+  if (sheet.classId === "monk" && sheet.level >= 2) { r.focus = sheet.level; r.uncannyMetabolism = 1; }
+  if (sheet.classId === "bard") r.bardicInspiration = Math.max(1, mod(sheet.abilities.cha));
+  if (sheet.classId === "druid" && sheet.level >= 2) r.wildShape = 2;
+  if (sheet.classId === "sorcerer") { r.innateSorcery = 2; if (sheet.level >= 2) r.sorceryPoints = sheet.level; if (sheet.level >= 5) r.sorcerousRestoration = 1; }
+  if (sheet.classId === "warlock" && sheet.level >= 2) r.magicalCunning = 1;
   if (sheet.species === "dragonborn") r.breathWeapon = pb;
   if (sheet.species === "orc") { r.adrenalineRush = pb; r.relentlessEndurance = 1; }
   if (sheet.species === "goliath") r.stonesEndurance = pb;
@@ -307,7 +343,10 @@ export function toCombatant(sheet: CharacterSheet, pos: Point, controller: Comba
   const mageArmor = false;
   let initBonus = mod(sheet.abilities.dex) + (sheet.feats.includes("alert") ? pb : 0);
   if (features.includes("remarkableAthlete")) initBonus += 0; // advantage handled in rollInitiative
-  const speed = species.speed + (features.includes("fastMovement") && equippedArmor(sheet).body?.category !== "heavy" ? 10 : 0);
+  const armorNow = equippedArmor(sheet);
+  let speed = species.speed + (features.includes("fastMovement") && armorNow.body?.category !== "heavy" ? 10 : 0);
+  if (features.includes("unarmoredMovement") && !armorNow.body && !armorNow.shield) speed += 10;
+  if (sheet.classId === "bard" && sheet.level >= 2 && !sheet.feats.includes("alert")) initBonus += Math.floor(pb / 2); // Jack of All Trades
   if (sheet.fightingStyle) features.push(`style:${sheet.fightingStyle}`);
   return {
     id: `pc-${sheet.id}`, name: sheet.name, side: "party", controller, characterId: sheet.id, level: sheet.level, size: species.size,
@@ -326,7 +365,8 @@ export function toCombatant(sheet: CharacterSheet, pos: Point, controller: Comba
 export function applyCombatantToSheet(sheet: CharacterSheet, c: Combatant): void {
   sheet.hp = Math.max(0, Math.min(c.hp, sheet.maxHp));
   sheet.tempHp = c.tempHp;
-  sheet.spellSlotsUsed = [...c.spellSlotsUsed];
+  // slots created with Font of Magic (negative "used") fade after the fight; never keep slots the sheet does not have
+  sheet.spellSlotsUsed = sheet.spellSlots.map((max, i) => Math.min(max, Math.max(0, c.spellSlotsUsed[i] ?? 0)));
   const max = resourceMax(sheet);
   for (const [k, v] of Object.entries(max)) sheet.resources[k] = Math.max(0, v - (c.resources[k] ?? v));
   sheet.heroicInspiration = !!c.heroicInspiration;
@@ -341,7 +381,23 @@ export function levelForXp(xp: number): number {
   return lvl;
 }
 
-export interface LevelUpChoices { asi?: Partial<AbilityScores>; newSpells?: string[]; newCantrips?: string[] }
+export interface LevelUpChoices {
+  asi?: Partial<AbilityScores>;
+  newSpells?: string[];
+  newCantrips?: string[];
+  fightingStyle?: CharacterSheet["fightingStyle"];
+  expertise?: Skill[];
+  bonusSkills?: Skill[];
+}
+
+/** Spells a subclass or class feature keeps always prepared, by level gained. */
+export const ALWAYS_PREPARED: Partial<Record<ClassId, Record<number, string[]>>> = {
+  cleric: { 3: ["aid", "bless", "cureWounds", "lesserRestoration"] },
+  paladin: { 2: ["divineSmite"], 3: ["shieldOfFaith"], 5: ["aid"] },
+  druid: { 3: ["mistyStep", "sleep", "shockingGrasp"], 5: ["lightningBolt"] },
+  sorcerer: { 3: ["chromaticOrb"] },
+  warlock: { 3: ["burningHands", "scorchingRay"], 5: ["fireball"] },
+};
 
 export function canLevelUp(sheet: CharacterSheet): boolean {
   return sheet.level < MAX_LEVEL && levelForXp(sheet.xp) > sheet.level;
@@ -378,12 +434,32 @@ export function levelUp(sheet: CharacterSheet, choices: LevelUpChoices = {}): st
     for (const id of choices.newCantrips ?? []) if (classSpells.some((s) => s.id === id && s.level === 0) && !sheet.cantrips.includes(id)) sheet.cantrips.push(id);
     const cpool = classSpells.filter((s) => s.level === 0 && !sheet.cantrips.includes(s.id));
     while (sheet.cantrips.filter((c) => SPELLS[c]?.classes.includes(sheet.classId)).length < wantCantrips && cpool.length) sheet.cantrips.push(cpool.shift()!.id);
-    if (sheet.classId === "cleric" && sheet.level >= 3) for (const d of ["aid", "bless", "cureWounds", "lesserRestoration"]) if (!sheet.spellsKnown.includes(d)) sheet.spellsKnown.push(d);
+    for (const [lvl, ids] of Object.entries(ALWAYS_PREPARED[sheet.classId] ?? {})) {
+      if (sheet.level < Number(lvl)) continue;
+      for (const d of ids) {
+        const sp = SPELLS[d];
+        if (!sp) continue;
+        if (sp.level === 0) { if (!sheet.cantrips.includes(d)) sheet.cantrips.push(d); }
+        else if (!sheet.spellsKnown.includes(d)) sheet.spellsKnown.push(d);
+      }
+    }
   }
   if (sheet.classId === "rogue" && sheet.level === 2) { /* cunning action */ }
   if (sheet.classId === "wizard" && sheet.level === 2 && !sheet.expertise.length) {
     const s = (["arcana", "history", "investigation"] as Skill[]).find((x) => sheet.skillProficiencies.includes(x));
     if (s) sheet.expertise.push(s);
+  }
+  if ((sheet.classId === "paladin" || sheet.classId === "ranger") && sheet.level === 2 && choices.fightingStyle) sheet.fightingStyle = choices.fightingStyle;
+  if (sheet.classId === "paladin" && sheet.level === 2) sheet.fightingStyle = sheet.fightingStyle ?? "defense";
+  if (sheet.classId === "bard" && sheet.level === 2) {
+    const picks = (choices.expertise ?? []).filter((x) => sheet.skillProficiencies.includes(x));
+    const prefer: Skill[] = ["persuasion", "performance", "deception", "insight", "perception", "stealth"];
+    for (const x of [...picks, ...prefer, ...sheet.skillProficiencies]) if (sheet.expertise.length < 2 && sheet.skillProficiencies.includes(x) && !sheet.expertise.includes(x)) sheet.expertise.push(x);
+  }
+  if (sheet.classId === "bard" && sheet.level === 3) {
+    const prefer: Skill[] = [...(choices.bonusSkills ?? []), "perception", "persuasion", "arcana", "history", "insight", "deception", "stealth", "investigation"];
+    let added = 0;
+    for (const x of prefer) if (added < 3 && !sheet.skillProficiencies.includes(x)) { sheet.skillProficiencies.push(x); added++; }
   }
   if (sheet.classId === "ranger" && sheet.level === 2) {
     sheet.fightingStyle = sheet.fightingStyle ?? "archery";
@@ -418,7 +494,16 @@ export function shortRest(sheet: CharacterSheet, rng: Rng, hitDiceToSpend: numbe
     notes.push(`Spent a Hit Die: +${Math.max(1, r)} HP`);
   }
   if (sheet.classId === "fighter") { sheet.resources.secondWind = Math.max(0, (sheet.resources.secondWind ?? 0) - 1); sheet.resources.actionSurge = 0; }
-  if (sheet.classId === "cleric") sheet.resources.channelDivinity = Math.max(0, (sheet.resources.channelDivinity ?? 0) - 1);
+  if (sheet.classId === "cleric" || sheet.classId === "paladin") sheet.resources.channelDivinity = Math.max(0, (sheet.resources.channelDivinity ?? 0) - 1);
+  if (sheet.classId === "warlock" && sheet.spellSlotsUsed.some((u) => u > 0)) { sheet.spellSlotsUsed = sheet.spellSlots.map(() => 0); notes.push("Pact Magic slots restored."); }
+  if (sheet.classId === "monk" && (sheet.resources.focus ?? 0) > 0) { sheet.resources.focus = 0; notes.push("Focus Points restored."); }
+  if (sheet.classId === "bard" && sheet.level >= 5) sheet.resources.bardicInspiration = 0;
+  if (sheet.classId === "druid") sheet.resources.wildShape = Math.max(0, (sheet.resources.wildShape ?? 0) - 1);
+  if (sheet.classId === "sorcerer" && sheet.level >= 5 && !sheet.resources.sorcerousRestoration && (sheet.resources.sorceryPoints ?? 0) > 0) {
+    sheet.resources.sorceryPoints = Math.max(0, sheet.resources.sorceryPoints - Math.floor(sheet.level / 2));
+    sheet.resources.sorcerousRestoration = 1;
+    notes.push("Sorcerous Restoration returns some Sorcery Points.");
+  }
   if (sheet.species === "orc") sheet.resources.adrenalineRush = 0;
   if (sheet.classId === "wizard" && !(sheet.resources.arcaneRecovery)) {
     let budget = Math.ceil(sheet.level / 2);

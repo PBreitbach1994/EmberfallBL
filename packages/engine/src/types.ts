@@ -22,7 +22,9 @@ export type Condition =
 
 export type Size = "tiny" | "small" | "medium" | "large" | "huge" | "gargantuan";
 
-export type ClassId = "fighter" | "rogue" | "cleric" | "wizard" | "barbarian" | "ranger";
+export type ClassId =
+  | "fighter" | "rogue" | "cleric" | "wizard" | "barbarian" | "ranger"
+  | "paladin" | "monk" | "bard" | "druid" | "sorcerer" | "warlock";
 export type SpeciesId =
   | "human" | "elf" | "dwarf" | "halfling" | "dragonborn" | "gnome" | "goliath" | "orc" | "tiefling";
 export type BackgroundId = "acolyte" | "criminal" | "sage" | "soldier";
@@ -118,7 +120,21 @@ export type SpellEffect =
   | { kind: "sleep" }
   | { kind: "mistyStep"; feet: number }
   | { kind: "scorchingRay"; rays: number }
-  | { kind: "huntersMark" };
+  | { kind: "huntersMark" }
+  | { kind: "eldritchBlast" }
+  | { kind: "hex" }
+  | { kind: "smite"; dice: string; perSlot: string; type: DamageType; rider?: "burning" | "thunderous" }
+  | { kind: "mockery" }
+  | { kind: "noHeal" }
+  | { kind: "faerieFire" }
+  | { kind: "entangle" }
+  | { kind: "moonbeam" }
+  | { kind: "pattern" }
+  | { kind: "armorOfAgathys"; amount: number }
+  | { kind: "hellishRebuke" }
+  | { kind: "chromaticOrb" }
+  | { kind: "dissonantWhispers" }
+  | { kind: "shillelagh" };
 
 // ---------------------------------------------------------------------------
 // Characters (persistent player characters)
@@ -265,7 +281,11 @@ export interface ActiveEffect {
     | "bless" | "acBonus" | "shieldSpell" | "dodge" | "disengage" | "advantageNextAttackAgainst"
     | "vexed" | "sapped" | "slowed" | "rage" | "noReactions" | "helped" | "huntersMark" | "aid"
     | "hidden" | "spiritualWeapon" | "mageArmor" | "guidance" | "heroic"
-    | "asleep" | "spiritGuardians" | "heldBySpell" | "frightenedBy" | "recklessAttack" | "toppleProne";
+    | "asleep" | "spiritGuardians" | "heldBySpell" | "frightenedBy" | "recklessAttack" | "toppleProne"
+    | "inspired" | "hexed" | "innateSorcery" | "faerieFire" | "moonbeam" | "armorOfAgathys" | "sacredWeapon"
+    | "noHeal" | "mockery" | "pattern" | "stunnedBy" | "shillelagh" | "burning" | "wildShape";
+  point?: Point;
+  dice?: string;
   condition?: Condition;
   saveDc?: number;
   saveAbility?: Ability;
@@ -324,6 +344,8 @@ export interface Combatant {
   heroicInspiration?: boolean;
   lastAttackerId?: string;
   speciesTraits?: string[];
+  /** Druid Wild Shape: original statistics to restore */
+  wildShape?: { ac: number; abilities: AbilityScores; speed: number; attacks: AttackOption[]; size: Size };
 }
 
 export interface AttackOption {
@@ -358,6 +380,11 @@ export interface TurnBudget {
   lightAttackMade?: boolean;
   nickUsed?: boolean;
   cleaveUsed?: boolean;
+  /** creatures hit this turn with a melee weapon / unarmed strike (for smites, stunning strike) */
+  meleeHits?: { targetId: string; crit: boolean; smitten?: boolean; unarmed?: boolean }[];
+  stunningUsed?: boolean;
+  leveledSpellCast?: boolean;
+  attackActionTaken?: boolean;
 }
 
 export interface LogEntry {
@@ -391,7 +418,7 @@ export interface EncounterState {
 export type CombatCommand =
   | { type: "move"; to: Point }
   | { type: "attack"; attackId: string; targetId: string }
-  | { type: "cast"; spellId: string; slotLevel?: number; targetIds?: string[]; point?: Point }
+  | { type: "cast"; spellId: string; slotLevel?: number; targetIds?: string[]; point?: Point; metamagic?: "quickened" | "twinned"; damageType?: DamageType }
   | { type: "monsterAction"; actionId: string; targetIds?: string[]; point?: Point }
   | { type: "dash" }
   | { type: "disengage" }
@@ -402,9 +429,23 @@ export type CombatCommand =
   | { type: "actionSurge" }
   | { type: "rage" }
   | { type: "reckless" }
+  | { type: "smite"; spellId: string; targetId: string; slotLevel?: number }
+  | { type: "layOnHands"; targetId: string; amount: number; curePoison?: boolean }
+  | { type: "martialArts"; targetId: string }
+  | { type: "flurryOfBlows"; targetIds: string[]; technique?: "addle" | "push" | "topple" }
+  | { type: "patientDefense"; focus?: boolean }
+  | { type: "stepOfTheWind"; focus?: boolean }
+  | { type: "stunningStrike"; targetId: string }
+  | { type: "bardicInspiration"; targetId: string }
+  | { type: "innateSorcery" }
+  | { type: "fontOfMagic"; mode: "createSlot" | "toPoints"; slotLevel: number }
+  | { type: "wildShape" }
+  | { type: "revertShape" }
+  | { type: "landsAid"; point: Point; healTargetId?: string }
+  | { type: "moveMoonbeam"; point: Point }
   | { type: "breathWeapon"; point: Point }
   | { type: "cunningAction"; mode: "dash" | "disengage" | "hide" }
-  | { type: "channelDivinity"; mode: "turnUndead" | "divineSpark" | "preserveLife"; targetId?: string }
+  | { type: "channelDivinity"; mode: "turnUndead" | "divineSpark" | "preserveLife" | "sacredWeapon"; targetId?: string }
   | { type: "useItem"; itemId: string; targetId?: string }
   | { type: "stabilize"; targetId: string }
   | { type: "standUp" }

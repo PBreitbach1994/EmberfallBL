@@ -207,6 +207,8 @@ const expected = (a: AttackOption) => averageDice(a.damage) + a.damageBonus + (a
 function canCast(c: Combatant, id: string, enc: EncounterState): boolean {
   const sp = SPELLS[id];
   if (!sp || !c.spells.includes(id)) return false;
+  if (c.wildShape || sp.effect?.kind === "smite" || sp.castingTime === "reaction") return false;
+  if (sp.level > 0 && enc.budget.leveledSpellCast) return false;
   if (sp.castingTime === "action" && !enc.budget.action) return false;
   if (sp.castingTime === "bonus" && !enc.budget.bonusAction) return false;
   if (sp.level > 0 && enc.budget.bonusSpellCast) return false;
@@ -256,12 +258,58 @@ function planCompanion(enc: EncounterState, c: Combatant): CombatCommand {
       const p = approachTile(enc, c, d, 5, b.movement); if (p && !samePoint(p, c.pos)) return { type: "move", to: p };
     }
   }
+  // --- Paladin: Lay On Hands for the dying
+  if (c.features.includes("layOnHands") && b.bonusAction && (c.resources.layOnHands ?? 0) > 0) {
+    const d = dying[0] ?? (c.hp < c.maxHp * 0.35 ? c : allies.find((o) => o.hp > 0 && o.hp < o.maxHp * 0.3 && dist(c.pos, o.pos) <= 5));
+    if (d) {
+      if (dist(c.pos, d.pos) <= 5) return { type: "layOnHands", targetId: d.id, amount: Math.min(c.resources.layOnHands, d.maxHp - Math.max(0, d.hp)) };
+      if (d.hp <= 0) { const p = approachTile(enc, c, d, 5, b.movement); if (p && !samePoint(p, c.pos)) return { type: "move", to: p }; }
+    }
+  }
+  // --- Follow-ups right after landing a melee hit this turn
+  const lastHit = (b.meleeHits ?? []).filter((h) => !h.smitten).map((h) => ({ h, t: enc.combatants.find((x) => x.id === h.targetId) })).filter((x) => x.t && !x.t.dead && x.t.hp > 0).pop();
+  if (lastHit?.t) {
+    const t = lastHit.t;
+    if (c.features.includes("stunningStrike") && !b.stunningUsed && (c.resources.focus ?? 0) > 0 && !t.conditions.includes("stunned") && t.hp > 8)
+      return { type: "stunningStrike", targetId: t.id };
+    if (b.bonusAction && !b.leveledSpellCast && t.hp > 3) {
+      const slots = slotsRemaining(c).reduce((x, y) => x + y, 0);
+      if (c.spells.includes("divineSmite") && ((c.resources.paladinsSmite ?? 0) > 0 || slots > 0)) {
+        return (c.resources.paladinsSmite ?? 0) > 0 ? { type: "smite", spellId: "divineSmite", targetId: t.id } : { type: "smite", spellId: "divineSmite", targetId: t.id, slotLevel: 1 };
+      }
+      for (const id of ["thunderousSmite", "searingSmite"]) if (c.spells.includes(id) && slots > 1) return { type: "smite", spellId: id, targetId: t.id, slotLevel: 1 };
+    }
+  }
   // --- Self preservation
   if (c.features.includes("secondWind") && b.bonusAction && (c.resources.secondWind ?? 0) > 0 && c.hp < c.maxHp * 0.5) return { type: "secondWind" };
   if (c.hp < c.maxHp * 0.3 && b.bonusAction && (c.resources["item:potionHealing"] ?? 0) > 0) return { type: "useItem", itemId: "potionHealing", targetId: c.id };
   if (hurt.length && canCast(c, "healingWord", enc) && dist(c.pos, hurt[0].pos) <= 60) return { type: "cast", spellId: "healingWord", targetIds: [hurt[0].id] };
 
   // --- Openers
+  if (c.features.includes("innateSorcery") && b.bonusAction && (c.resources.innateSorcery ?? 0) > 0 && !c.effects.some((e) => e.kind === "innateSorcery") && foes.some((f) => dist(c.pos, f.pos) <= 120))
+    return { type: "innateSorcery" };
+  if (canCast(c, "hex", enc) && !c.concentratingOn && dist(c.pos, nearestFoe.pos) <= 90) {
+    const t = [...foes].filter((f) => dist(c.pos, f.pos) <= 90).sort((x, y) => y.hp - x.hp)[0];
+    if (t) return { type: "cast", spellId: "hex", targetIds: [t.id] };
+  }
+  if (canCast(c, "armorOfAgathys", enc) && b.bonusAction && c.tempHp === 0 && slotsRemaining(c).reduce((x, y) => x + y, 0) > 0 && foes.some((f) => dist(c.pos, f.pos) <= 30) && !b.leveledSpellCast)
+    return { type: "cast", spellId: "armorOfAgathys" };
+  if (c.features.includes("bardicInspiration") && b.bonusAction && (c.resources.bardicInspiration ?? 0) > 0) {
+    const ally = allies.filter((o) => o.id !== c.id && o.hp > 0 && !o.effects.some((e) => e.kind === "inspired") && dist(c.pos, o.pos) <= 60)
+      .sort((x, y) => (dist(x.pos, nearestFoe.pos) - dist(y.pos, nearestFoe.pos)))[0];
+    if (ally) return { type: "bardicInspiration", targetId: ally.id };
+  }
+  if (c.features.includes("sacredWeapon") && b.action && (c.resources.channelDivinity ?? 0) > 0 && !c.effects.some((e) => e.kind === "sacredWeapon") && dist(c.pos, nearestFoe.pos) <= 10)
+    return { type: "channelDivinity", mode: "sacredWeapon" };
+  const mb = c.effects.find((e) => e.kind === "moonbeam" && e.source === c.id);
+  if (mb?.point && b.bonusAction && !foes.some((f) => dist(f.pos, mb.point!) <= 5)) {
+    const t = foes.filter((f) => dist(f.pos, mb.point!) <= 60 && !allies.some((o) => o.hp > 0 && dist(o.pos, f.pos) <= 5)).sort((x, y) => y.hp - x.hp)[0];
+    if (t) return { type: "moveMoonbeam", point: t.pos };
+  }
+  if (c.features.includes("fontOfMagic") && b.bonusAction && slotsRemaining(c).every((x) => x <= 0) && (c.resources.sorceryPoints ?? 0) >= 2)
+    return { type: "fontOfMagic", mode: "createSlot", slotLevel: 1 };
+  if (c.features.includes("wildShape") && !c.wildShape && b.bonusAction && (c.resources.wildShape ?? 0) > 0 && slotsRemaining(c).every((x) => x <= 0) && dist(c.pos, nearestFoe.pos) <= 15)
+    return { type: "wildShape" };
   if (c.features.includes("rage") && b.bonusAction && !c.effects.some((e) => e.kind === "rage") && (c.resources.rage ?? 0) > 0 && dist(c.pos, nearestFoe.pos) <= 35) return { type: "rage" };
   if (c.features.includes("recklessAttack") && b.action && !c.effects.some((e) => e.kind === "recklessAttack") && dist(c.pos, nearestFoe.pos) <= 5 && c.hp > c.maxHp * 0.4) return { type: "reckless" };
   if (canCast(c, "huntersMark", enc) && !foes.some((f) => f.effects.some((e) => e.kind === "huntersMark" && e.source === c.id)) && !c.concentratingOn && dist(c.pos, weakestFoe.pos) <= 90)
@@ -279,13 +327,19 @@ function planCompanion(enc: EncounterState, c: Combatant): CombatCommand {
 
   // --- Area spells
   if (b.action) {
-    for (const id of ["fireball", "shatter", "burningHands", "thunderwave", "sleep"]) {
+    for (const id of ["fireball", "hypnoticPattern", "moonbeam", "shatter", "entangle", "faerieFire", "burningHands", "thunderwave", "sleep"]) {
+      if (SPELLS[id]?.concentration && c.concentratingOn) continue;
       if (!canCast(c, id, enc)) continue;
       const sp = SPELLS[id];
       if (sp.targeting.kind !== "area") continue;
       if (id === "sleep" && foes.every((f) => f.hp > 15)) continue;
       const best = clusterPoint(enc, c, sp.targeting.shape, sp.targeting.size, sp.targeting.range);
       if (best && best.foes >= 2) return { type: "cast", spellId: id, point: best.point };
+      if (best && best.foes >= 1 && id === "moonbeam" && foes.some((f) => f.hp > 20)) return { type: "cast", spellId: id, point: best.point };
+    }
+    if (c.features.includes("landsAid") && (c.resources.wildShape ?? 0) > 0) {
+      const best = clusterPoint(enc, c, "sphere", 10, 60);
+      if (best && best.foes >= 2) return { type: "landsAid", point: best.point };
     }
     if (c.features.includes("breathWeapon") && (c.resources.breathWeapon ?? 0) > 0 && b.attacksLeft > 0) {
       const best = clusterPoint(enc, c, "cone", 15, 0);
@@ -294,18 +348,32 @@ function planCompanion(enc: EncounterState, c: Combatant): CombatCommand {
   }
 
   // --- Spellcasters: ranged spell damage
-  const casterFirst = c.classId === "wizard" || c.classId === "cleric";
+  const casterFirst = !c.wildShape && (c.classId === "wizard" || c.classId === "cleric" || c.classId === "sorcerer" || c.classId === "bard" || c.classId === "druid"
+    || (c.classId === "warlock" && c.spells.includes("eldritchBlast") && !foes.some((f) => dist(c.pos, f.pos) <= 5 && c.attacks.some((a) => a.kind === "melee" && a.id !== "unarmed" && a.toHit >= c.profBonus + 3))));
   if (casterFirst && b.action) {
     const inRange = (r: number) => foes.filter((f) => dist(c.pos, f.pos) <= r && hasLineOfSight(enc.map, c.pos, f.pos));
     if (canCast(c, "magicMissile", enc) && weakestFoe.hp <= 10 && inRange(120).includes(weakestFoe) && slotsRemaining(c).reduce((s, x) => s + x, 0) > 1) return { type: "cast", spellId: "magicMissile", targetIds: [weakestFoe.id] };
     if (canCast(c, "guidingBolt", enc) && inRange(120).length && slotsRemaining(c).reduce((s, x) => s + x, 0) > 2) return { type: "cast", spellId: "guidingBolt", targetIds: [inRange(120).sort((x, y) => y.hp - x.hp)[0].id] };
+    if (canCast(c, "chromaticOrb", enc) && inRange(90).length && slotsRemaining(c).reduce((s, x) => s + x, 0) > 1) {
+      const t = inRange(90).sort((x, y) => y.hp - x.hp)[0];
+      const type = (["fire", "cold", "lightning", "acid", "thunder", "poison"] as const).find((d) => !t.resistances.includes(d) && !t.immunities.includes(d)) ?? "force";
+      return { type: "cast", spellId: "chromaticOrb", targetIds: [t.id], damageType: type === "force" ? "fire" : type };
+    }
+    if (canCast(c, "dissonantWhispers", enc) && slotsRemaining(c).reduce((s, x) => s + x, 0) > 2) {
+      const t = inRange(60).find((f) => allies.some((o) => o.hp > 0 && dist(o.pos, f.pos) <= 5));
+      if (t) return { type: "cast", spellId: "dissonantWhispers", targetIds: [t.id] };
+    }
     const adjacentFoe = foes.some((f) => dist(c.pos, f.pos) <= 5);
     // casters step back from melee before casting
-    if (adjacentFoe && c.classId === "wizard" && b.movement > 0 && !b.disengaged) {
+    if (adjacentFoe && (c.classId === "wizard" || c.classId === "sorcerer" || c.classId === "warlock") && b.movement > 0 && !b.disengaged) {
       const p = fleeTile(enc, c, b.movement);
       if (p && !samePoint(p, c.pos)) return { type: "move", to: p };
     }
-    for (const id of ["fireBolt", "sacredFlame", "rayOfFrost"]) {
+    if (canCast(c, "eldritchBlast", enc)) {
+      const targets = inRange(120).sort((x, y) => x.hp - y.hp);
+      if (targets.length) return { type: "cast", spellId: "eldritchBlast", targetIds: targets.length > 1 && targets[0].hp <= 6 ? [targets[0].id, targets[1].id] : [targets[0].id] };
+    }
+    for (const id of ["eldritchBlast", "fireBolt", "produceFlame", "viciousMockery", "sacredFlame", "poisonSpray", "rayOfFrost"]) {
       if (!canCast(c, id, enc)) continue;
       const sp = SPELLS[id];
       const range = sp.targeting.kind === "creature" ? sp.targeting.range : 60;
@@ -317,7 +385,7 @@ function planCompanion(enc: EncounterState, c: Combatant): CombatCommand {
 
   // --- Weapon attacks
   if (b.action && b.attacksLeft > 0 || (b.lightAttackMade && b.bonusAction && c.attacks.some((a) => a.light))) {
-    const melee = c.attacks.filter((a) => a.kind === "melee" && a.id !== "unarmed").sort((x, y) => expected(y) - expected(x));
+    const melee = c.attacks.filter((a) => a.kind === "melee" && (a.id !== "unarmed" || c.classId === "monk")).sort((x, y) => expected(y) - expected(x));
     const ranged = c.attacks.filter((a) => a.kind === "ranged").sort((x, y) => expected(y) - expected(x));
     const preferRanged = ranged.length > 0 && (c.classId === "rogue" || c.classId === "ranger" || (expected(ranged[0]) >= (melee[0] ? expected(melee[0]) : 0) && c.classId !== "barbarian"));
     const offhand = !(b.action && b.attacksLeft > 0);
@@ -366,6 +434,17 @@ function planCompanion(enc: EncounterState, c: Combatant): CombatCommand {
       if (!b.dashed && b.action) return { type: "dash" };
     }
   }
+  // Monk: bonus-action strikes after attacking
+  if (c.features.includes("martialArts") && b.bonusAction && !b.action) {
+    const adj = foes.filter((f) => dist(c.pos, f.pos) <= 5).sort((x, y) => x.hp - y.hp);
+    if (adj.length) {
+      if (c.features.includes("monksFocus") && (c.resources.focus ?? 0) > 1) return { type: "flurryOfBlows", targetIds: adj.slice(0, 2).map((f) => f.id), technique: c.features.includes("openHandTechnique") ? "topple" : undefined };
+      return { type: "martialArts", targetId: adj[0].id };
+    }
+    if (c.features.includes("monksFocus") && c.hp < c.maxHp * 0.4) return { type: "patientDefense", focus: (c.resources.focus ?? 0) > 0 };
+  }
+  // Druid in beast form with nothing to bite: revert
+  if (c.wildShape && b.bonusAction && !foes.some((f) => dist(c.pos, f.pos) <= 5) && slotsRemaining(c).some((x) => x > 0)) return { type: "revertShape" };
   // spare bonus action: cunning hide
   if (c.features.includes("cunningAction") && b.bonusAction && !foes.some((f) => dist(c.pos, f.pos) <= 5) && !c.effects.some((e) => e.kind === "hidden")) return { type: "cunningAction", mode: "hide" };
   return { type: "endTurn" };
