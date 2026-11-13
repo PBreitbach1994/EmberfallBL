@@ -1,0 +1,16 @@
+services:
+  emberfall:
+    build: .
+    container_name: emberfall
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Players need this code to join. Change it!
+      INVITE_CODE: ${INVITE_CODE:-change-me}
+      # Enables the Claude AI Dungeon Master. Leave empty for the scripted DM.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional: override the model (default claude-opus-5-5)
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-}
+    volumes:
+      - ./data:/data
