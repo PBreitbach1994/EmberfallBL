@@ -95,7 +95,7 @@ sudo mkdir -p /opt/emberfall && sudo chown $USER: /opt/emberfall
 git clone https://github.com/PBreitbach1994/EmberfallBL.git /opt/emberfall
 cd /opt/emberfall
 cp .env.example .env
-nano .env
+vim .env
 ```
 
 > **Private repo?** On GitHub go to **Settings → Developer settings → Fine-grained tokens**, create a token with *Contents: read*
