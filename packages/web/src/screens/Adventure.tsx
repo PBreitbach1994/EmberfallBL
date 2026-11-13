@@ -1,6 +1,6 @@
 import { Vignette } from "../components/art/Vignette";
 import { Portrait } from "../components/art/Portrait";
-import { DiceTray } from "../components/DiceTray";
+import { Dice } from "../components/DiceArena";
 import { SPECIES } from "@tavern/engine";
 const speciesId = (name: string) => Object.values(SPECIES).find((s) => s.name === name)?.id ?? "human";
 import { useState } from "react";
@@ -48,7 +48,7 @@ export function Adventure({ ctx, id }: { ctx: AppCtx; id: string }) {
 
   return (
     <div className="adventure">
-      <DiceTray log={view.log} />
+      <Dice log={view.log} combatLog={view.encounter?.log} />
       <div className="adv-head panel">
         <div>
           <h1>{view.title}</h1>

@@ -59,6 +59,18 @@ export function parseDice(expr: string): ParsedDice {
 
 export interface RollResult { total: number; rolls: number[]; expr: string }
 
+/** A single physical die that was rolled, for the client's dice animation. */
+export interface RolledDie { sides: number; value: number }
+
+// Every damage/healing die rolled is recorded here; the combat log attaches them to the next entry
+// so the client can show the actual dice that were thrown.
+let captured: RolledDie[] = [];
+export function drainRolledDice(): RolledDie[] { const out = captured; captured = []; return out; }
+export function resetRolledDice() { captured = []; }
+export function rolledDiceMark(): number { return captured.length; }
+/** Forget dice recorded since `mark` that were discarded (e.g. the losing roll of Savage Attacker). */
+export function discardRolledDice(start: number, count: number) { captured.splice(start, count); }
+
 export function roll(rng: Rng, expr: string, opts: { crit?: boolean; rerollBelow?: number } = {}): RollResult {
   const { terms, bonus } = parseDice(expr);
   const rolls: number[] = [];
@@ -70,6 +82,8 @@ export function roll(rng: Rng, expr: string, opts: { crit?: boolean; rerollBelow
       // Great Weapon Fighting (2024): treat 1s and 2s as 3s
       if (opts.rerollBelow && r < opts.rerollBelow) r = opts.rerollBelow;
       rolls.push(r);
+      captured.push({ sides: t.sides, value: r });
+      if (captured.length > 64) captured.shift();
       total += Math.sign(t.count) * r;
     }
   }

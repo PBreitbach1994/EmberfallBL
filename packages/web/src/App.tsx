@@ -8,6 +8,7 @@ import { CharacterCreate } from "./screens/CharacterCreate";
 import { CharacterSheetView } from "./screens/CharacterSheet";
 import { Adventure } from "./screens/Adventure";
 import { Admin } from "./screens/Admin";
+import { DiceModeToggle } from "./components/DiceArena";
 import { useSound } from "./sound";
 import { LanternIcon } from "./components/art/LanternIcon";
 
@@ -138,6 +139,7 @@ export function App() {
           {user.isAdmin && nav({ name: "admin" }, "Admin")}
         </nav>
         <div className="userbox">
+          <DiceModeToggle />
           <SoundToggle />
           <span>{user.name}</span>
           <button className="linkbtn" onClick={logout}>Leave</button>

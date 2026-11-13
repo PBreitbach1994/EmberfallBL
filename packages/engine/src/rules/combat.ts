@@ -5,7 +5,7 @@ import { MONSTERS } from "../data/monsters.js";
 import { SPELLS } from "../data/spells.js";
 import { WEAPONS } from "../data/equipment.js";
 import { GEAR } from "../data/equipment.js";
-import { averageDice, fmtMod, mod, profForLevel, Rng, roll, rollD20 } from "../dice.js";
+import { averageDice, discardRolledDice, drainRolledDice, fmtMod, mod, profForLevel, resetRolledDice, rolledDiceMark, Rng, roll, rollD20 } from "../dice.js";
 import type {
   Ability, ActiveEffect, AttackOption, CombatCommand, Combatant, CommandResult, Condition, DamageType, EncounterState,
   GridMap, LogEntry, MonsterAction, MonsterDef, Point, TurnBudget,
@@ -100,6 +100,11 @@ export function createEncounter(setup: EncounterSetup): EncounterState {
 
 let tick = 0;
 function entry(kind: LogEntry["kind"], text: string, actorId?: string, data?: unknown): LogEntry {
+  // damage/healing lines carry the dice that produced them (for the client's dice animation)
+  if (kind === "combat" && /💥|regains|takes \d+/.test(text)) {
+    const dice = drainRolledDice();
+    if (dice.length) data = { ...(data as object | undefined), dice };
+  }
   return { t: Date.now() * 1000 + (tick++ % 1000), kind, text, actorId, data };
 }
 
@@ -484,11 +489,13 @@ function weaponDamage(enc: EncounterState, rng: Rng, a: Combatant, t: Combatant,
   // Great Weapon Fighting: two-handed melee (or versatile wielded in two hands) treats 1s and 2s as 3s
   const twoHanded = atk.kind === "melee" && (WEAPONS[atk.weaponId ?? ""]?.properties.includes("twoHanded") || atk.damage !== WEAPONS[atk.weaponId ?? ""]?.damage);
   const rerollBelow = twoHanded && hasFightingStyle(a, "greatWeapon") ? 3 : undefined;
+  const mark = rolledDiceMark();
   let r = roll(rng, atk.damage, { crit, rerollBelow });
   // Savage Attacker: once per turn roll weapon damage dice twice and take the higher
   if (a.features.includes("savageAttacker") && !a.effects.some((e) => e.id === `savage-${a.id}`)) {
     const r2 = roll(rng, atk.damage, { crit, rerollBelow });
-    if (r2.total > r.total) r = r2;
+    const n = r.rolls.length;
+    if (r2.total > r.total) { r = r2; discardRolledDice(mark, n); } else discardRolledDice(mark + n, n);
     a.effects.push({ id: `savage-${a.id}`, name: "Savage Attacker used", source: a.id, kind: "heroic", expires: "endOfOwnTurn" });
   }
   let bonus = opts.offhand || opts.cleave ? Math.min(0, atk.damageBonus) : atk.damageBonus;
@@ -641,6 +648,7 @@ function expireEffects(enc: EncounterState, actorId: string, when: "start" | "en
 }
 
 function startTurn(enc: EncounterState, rng: Rng) {
+  resetRolledDice();
   const c = current(enc);
   const log: LogEntry[] = [];
   expireEffects(enc, c.id, "start");
@@ -835,6 +843,7 @@ function resolveMonsterSave(enc: EncounterState, rng: Rng, m: Combatant, targets
 // Command application
 
 export function applyCommand(enc: EncounterState, actorId: string, cmd: CombatCommand): CommandResult {
+  resetRolledDice();
   const rng = new Rng(enc.rngState);
   const log: LogEntry[] = [];
   const fail = (error: string): CommandResult => ({ ok: false, error, log: [] });
