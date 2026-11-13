@@ -1,3 +1,5 @@
+import { TavernScene, CampaignMapArt, BuildingArt } from "../components/art/TavernArt";
+import { Portrait } from "../components/art/Portrait";
 import { useMemo, useState } from "react";
 import type { AdventureSummary, AdventureView, CharacterSheet, NewAdventureRequest, ScenarioSummary } from "@tavern/engine";
 import { CLASSES, itemName } from "@tavern/engine";
@@ -17,6 +19,7 @@ export function Tavern({ ctx }: { ctx: AppCtx }) {
   return (
     <div className="tavern">
       <section className="panel hero">
+        <TavernScene winter={c.season === "winter"} />
         <h1>{campaign.world.tavern}</h1>
         <p className="prose">{campaign.world.overview}</p>
         <p className="muted">Behind the bar: <strong>{campaign.world.keeper.name}</strong> — {campaign.world.keeper.description}</p>
@@ -47,7 +50,7 @@ export function Tavern({ ctx }: { ctx: AppCtx }) {
                     <span className="muted small">Lv {s.recommendedLevel[0]}–{s.recommendedLevel[1]}</span>
                   </div>
                   <div className="small muted">{s.location} · {s.arc}</div>
-                  <p className="hook">“{s.hook}”</p>
+                  <p className="hook">“{s.hook.replace(/^["“]+|["”]+$/g, "")}”</p>
                   {s.available && <p className="small">{s.summary}</p>}
                   <div className="row">
                     {s.completed && <Pill kind="good">Completed</Pill>}
@@ -94,20 +97,8 @@ export function Tavern({ ctx }: { ctx: AppCtx }) {
 
 function CampaignMap({ scenarios, onPick }: { scenarios: ScenarioSummary[]; onPick: (s: ScenarioSummary) => void }) {
   return (
-    <div className="campmap" role="img" aria-label="Campaign map">
-      <div className="campmap-town" style={{ left: "50%", top: "50%" }}>🏮<span>Emberfall</span></div>
-      {scenarios.map((s) => (
-        <button
-          key={s.id}
-          className={`pin ${s.available ? "avail" : "locked"} ${s.completed ? "done" : ""}`}
-          style={{ left: `${s.mapPosition[0]}%`, top: `${s.mapPosition[1]}%` }}
-          onClick={() => onPick(s)}
-          title={`${s.name}${s.available ? "" : ` (${s.reason ?? "locked"})`}`}
-        >
-          <span className="pin-dot">{s.completed ? "✓" : s.available ? "!" : "?"}</span>
-          <span className="pin-label">{s.available || s.completed ? s.name : "???"}</span>
-        </button>
-      ))}
+    <div className="campmap">
+      <CampaignMapArt scenarios={scenarios} onPick={onPick} />
     </div>
   );
 }
@@ -190,7 +181,7 @@ function StartAdventure({ ctx, scenario, onClose }: { ctx: AppCtx; scenario: Sce
 
   return (
     <Modal title={`Take the job: ${scenario.name}`} onClose={onClose} wide>
-      <p className="hook">“{scenario.hook}”</p>
+      <p className="hook">“{scenario.hook.replace(/^["“]+|["”]+$/g, "")}”</p>
       <p>{scenario.summary}</p>
       <label className="check"><input type="checkbox" checked={autonomous} onChange={(e) => setAutonomous(e.target.checked)} /> Send an autonomous AI party (they play it out on their own; read the tale later)</label>
       {!autonomous && (
@@ -282,8 +273,9 @@ function TownPanel({ ctx }: { ctx: AppCtx }) {
         <p className="small muted">Upgrades are paid from the town treasury and stores (donations and scenario rewards fill them).</p>
         <ul className="buildings">
           {campaign.buildings.map((b) => (
-            <li key={b.def.id}>
-              <div>
+            <li key={b.def.id} className="building-card">
+              <BuildingArt id={b.def.id} level={b.level} max={b.def.levels.length} />
+              <div className="building-info">
                 <strong>{b.def.name}</strong> <Pill>{b.level === 0 ? "Unbuilt" : `Level ${b.level}`}</Pill>
                 <div className="small muted">{b.def.description}</div>
                 {b.level > 0 && <div className="small">{b.def.levels[b.level - 1]?.description}</div>}
@@ -354,7 +346,7 @@ function TownPanel({ ctx }: { ctx: AppCtx }) {
           <h2>Who's in the common room</h2>
           <ul className="chronicle">
             {ctx.companions.map((p) => (
-              <li key={p.id}>{CLASS_ICON[p.classId]} <strong>{p.name}</strong> <span className="small muted">{classLabel(p)}</span> <HpBar hp={p.hp} max={p.maxHp} small /></li>
+              <li key={p.id} className="regular"><Portrait seed={p.id} species={p.species} classId={p.classId} size={40} dead={p.dead} /> <strong>{p.name}</strong> <span className="small muted">{classLabel(p)}</span> <HpBar hp={p.hp} max={p.maxHp} small /></li>
             ))}
             {!ctx.companions.length && <li className="muted">Just you and the barkeep.</li>}
           </ul>

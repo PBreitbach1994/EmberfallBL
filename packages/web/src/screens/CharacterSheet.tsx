@@ -1,3 +1,4 @@
+import { Portrait } from "../components/art/Portrait";
 import { useState } from "react";
 import type { Ability, AbilityScores, CharacterSheet } from "@tavern/engine";
 import {
@@ -38,10 +39,12 @@ export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
   };
 
   return (
-    <div className="sheet stack">
+    <div className="sheet stack printed">
       <section className="panel">
         <div className="row spread">
-          <div>
+          <div className="sheet-title">
+            <Portrait seed={sheet.id} species={sheet.species} classId={sheet.classId} size={96} dead={sheet.dead} />
+            <div>
             <h1>{sheet.name} {sheet.prestige > 0 && <span className="prestige">{"★".repeat(sheet.prestige)}</span>}</h1>
             <div className="muted">{classLabel(sheet)}{sheet.subclass ? ` (${cls.subclass.name})` : ""} · {BACKGROUNDS[sheet.background].name}</div>
             <div className="row">
@@ -51,6 +54,7 @@ export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
               {sheet.heroicInspiration && <Pill kind="good">Heroic Inspiration</Pill>}
               {sheet.exhaustion > 0 && <Pill kind="warn">Exhaustion {sheet.exhaustion}</Pill>}
               {sheet.conditions.map((c) => <Pill key={c} kind="warn">{c}</Pill>)}
+            </div>
             </div>
           </div>
           <button onClick={() => ctx.go({ name: "characters" })}>← Roster</button>

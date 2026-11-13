@@ -1,3 +1,4 @@
+import { Portrait } from "../components/art/Portrait";
 import { useState } from "react";
 import type { CharacterSheet } from "@tavern/engine";
 import { BACKGROUNDS, CLASSES, SPECIES } from "@tavern/engine";
@@ -46,7 +47,7 @@ function CharCard({ c, onOpen }: { c: CharacterSheet; onOpen: () => void }) {
   return (
     <button className={`charcard ${c.dead ? "dead" : ""}`} onClick={onOpen}>
       <div className="charcard-head">
-        <span className="classicon">{CLASS_ICON[c.classId]}</span>
+        <Portrait seed={c.id} species={c.species} classId={c.classId} size={58} dead={c.dead} />
         <div>
           <strong>{c.name}</strong>
           <div className="small muted">{classLabel(c)}</div>

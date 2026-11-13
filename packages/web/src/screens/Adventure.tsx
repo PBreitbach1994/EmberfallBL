@@ -1,3 +1,8 @@
+import { Vignette } from "../components/art/Vignette";
+import { Portrait } from "../components/art/Portrait";
+import { DiceTray } from "../components/DiceTray";
+import { SPECIES } from "@tavern/engine";
+const speciesId = (name: string) => Object.values(SPECIES).find((s) => s.name === name)?.id ?? "human";
 import { useState } from "react";
 import type { AdventureAction, AdventureView } from "@tavern/engine";
 import { CLASSES } from "@tavern/engine";
@@ -43,6 +48,7 @@ export function Adventure({ ctx, id }: { ctx: AppCtx; id: string }) {
 
   return (
     <div className="adventure">
+      <DiceTray log={view.log} />
       <div className="adv-head panel">
         <div>
           <h1>{view.title}</h1>
@@ -80,6 +86,7 @@ export function Adventure({ ctx, id }: { ctx: AppCtx; id: string }) {
               </section>
               {view.event && (
                 <section className="panel eventcard">
+                  <Vignette text={`road ${view.event.title} ${view.event.text.slice(0, 80)}`} seed={view.event.id} height={90} />
                   <div className="small muted">Event</div>
                   <h2>{view.event.title}</h2>
                   <p className="prose">{view.event.text}</p>
@@ -94,6 +101,7 @@ export function Adventure({ ctx, id }: { ctx: AppCtx; id: string }) {
               )}
               {view.node && !view.event && (
                 <section className="panel scene">
+                  <Vignette text={`${view.scenarioId} ${view.title} ${view.node.title}`} seed={view.node.id} />
                   <h2>{view.node.title}</h2>
                   {view.node.narration && <p className="prose">{view.node.narration}</p>}
                   {view.node.npcs.length > 0 && <div className="small muted">Present: {view.node.npcs.map((n) => `${n.name} (${n.role})`).join(", ")}</div>}
@@ -139,7 +147,7 @@ export function Adventure({ ctx, id }: { ctx: AppCtx; id: string }) {
                 return (
                   <li key={p.characterId} className={p.dead ? "dead" : ""}>
                     <div className="row spread">
-                      <span>{CLASS_ICON[p.classId]} <strong>{p.name}</strong></span>
+                      <span className="party-who"><Portrait seed={p.characterId} species={speciesId(p.species)} classId={p.classId} size={38} dead={p.dead} /> <strong>{p.name}</strong></span>
                       <span className="small muted">AC {p.ac}</span>
                     </div>
                     <div className="small muted">L{p.level} {CLASSES[p.classId]?.name} · {p.controller === "human" ? `🧑 ${p.userName ?? "player"}` : "🤖 AI"}</div>
