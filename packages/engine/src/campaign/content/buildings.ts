@@ -27,8 +27,8 @@ export const BUILDINGS: Record<string, BuildingDef> = {
     startingLevel: 1,
     levels: [
       { cost: { gold: 0 }, description: "Healing services for coin.", unlocks: ["service:heal"] },
-      { cost: { gold: 120, timber: 2, relic: 1 }, description: "A consecrated sanctuary. Raise Dead may be performed (500 gp diamond; not in Hardcore mode).", unlocks: ["service:raiseDead"] },
-      { cost: { gold: 200, iron: 2, relic: 2 }, description: "Restoration rites cure curses, poisons and exhaustion.", unlocks: ["service:restoration"] },
+      { cost: { gold: 120, timber: 2, relic: 1 }, description: "A consecrated sanctuary. Raise Dead may be performed within 14 days of death (500 gp, +250 for each earlier death; not in Hardcore mode).", unlocks: ["service:raiseDead"] },
+      { cost: { gold: 200, iron: 2, relic: 2 }, description: "The high altar is restored: Resurrection (no time limit, no lingering weakness) and restoration rites that cure curses, poisons and exhaustion.", unlocks: ["service:restoration", "service:resurrection"] },
     ],
   },
   alchemist: {

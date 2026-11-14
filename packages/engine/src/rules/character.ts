@@ -357,6 +357,7 @@ export function toCombatant(sheet: CharacterSheet, pos: Point, controller: Comba
     spells: [...sheet.cantrips, ...sheet.spellsKnown], spellSlots: [...sheet.spellSlots], spellSlotsUsed: [...sheet.spellSlotsUsed],
     spellAbility: spellAbility(sheet.classId), resources: resourcesRemaining(sheet), features,
     deathSaves: { successes: 0, failures: 0 }, stable: false, dead: sheet.dead, fled: false, heroicInspiration: sheet.heroicInspiration,
+    deathSaveMod: -Math.min(3, sheet.deathCount ?? 0),
     speciesTraits: species.traits.map((t) => t.key),
   };
 }
@@ -372,6 +373,7 @@ export function applyCombatantToSheet(sheet: CharacterSheet, c: Combatant): void
   sheet.heroicInspiration = !!c.heroicInspiration;
   sheet.conditions = c.conditions.filter((x) => x === "poisoned" || x === "exhaustion");
   if (c.dead) sheet.dead = true;
+  if (c.resources._deaths) sheet.deathCount = (sheet.deathCount ?? 0) + c.resources._deaths; // revived mid-fight
   if (!c.dead && c.hp <= 0) sheet.hp = 1; // stabilised characters wake with 1 HP after the fight
 }
 

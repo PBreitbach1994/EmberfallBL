@@ -696,10 +696,13 @@ function startTurn(enc: EncounterState, rng: Rng) {
   // Death saves
   if (c.side === "party" && c.hp <= 0 && !c.dead && !c.stable) {
     const r = rollD20(rng, 0, 0, { halflingLuck: c.features.includes("luck") });
+    const mark = c.deathSaveMod ?? 0; // "Returned from the Grave" penalty
+    const total = r.natural + mark;
+    const markTxt = mark ? ` ${mark} (returned from the grave) = ${total}` : "";
     if (r.natural === 20) { c.hp = 1; removeCondition(c, "unconscious"); c.deathSaves = { successes: 0, failures: 0 }; log.push(entry("roll", `${c.name} rolls a natural 20 on the death save and surges back with 1 HP!`, c.id)); }
     else if (r.natural === 1) { c.deathSaves.failures += 2; log.push(entry("roll", `${c.name} rolls a 1 on the death save — two failures!`, c.id)); }
-    else if (r.natural >= 10) { c.deathSaves.successes++; log.push(entry("roll", `${c.name} death save: ${r.natural} — success (${c.deathSaves.successes}/3).`, c.id)); }
-    else { c.deathSaves.failures++; log.push(entry("roll", `${c.name} death save: ${r.natural} — failure (${c.deathSaves.failures}/3).`, c.id)); }
+    else if (total >= 10) { c.deathSaves.successes++; log.push(entry("roll", `${c.name} death save: ${r.natural}${markTxt} — success (${c.deathSaves.successes}/3).`, c.id, { natural: r.natural, rolls: r.rolls })); }
+    else { c.deathSaves.failures++; log.push(entry("roll", `${c.name} death save: ${r.natural}${markTxt} — failure (${c.deathSaves.failures}/3).`, c.id, { natural: r.natural, rolls: r.rolls })); }
     if (c.deathSaves.failures >= 3) { c.dead = true; log.push(entry("death", `💀 ${c.name} has died.`, c.id)); }
     else if (c.deathSaves.successes >= 3) { c.stable = true; log.push(entry("combat", `${c.name} is stable.`, c.id)); }
   }
@@ -1597,6 +1600,8 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
     const t = targets[0];
     a.resources["item:diamond300"]--;
     t.dead = false; t.hp = 1; t.deathSaves = { successes: 0, failures: 0 }; removeCondition(t, "unconscious");
+    t.resources._deaths = (t.resources._deaths ?? 0) + 1; // the return leaves a mark
+    t.deathSaveMod = Math.max(-3, (t.deathSaveMod ?? 0) - 1);
     log.push(entry("combat", `🌟 ${t.name} gasps back to life! (Revivify — the diamond crumbles to dust)`, a.id));
     return null;
   }

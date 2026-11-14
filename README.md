@@ -61,8 +61,10 @@ Environment: `PORT` (3000), `DATA_DIR` (`./data`), `INVITE_CODE` (`emberfall` �
   into the chronicle. Owners can gift Embers from Admin. Tune prices/earnings in `packages/engine/src/rewards.ts`.
 - **Difficulty** — Story / Normal / Hard / Brutal (campaign owner picks it on the tavern screen). Fights also scale
   automatically to party size and to how far the party's level is above or below the scenario's.
-- **Hardcore** — campaign-wide or per character: no resurrection. Otherwise *Revivify* (in combat, within a minute,
-  300 gp diamond) and the temple's *Raise Dead* (temple level 2, 500 gp, within two campaign weeks) bring heroes back.
+- **Death & coming back** — *Revivify* mid-fight (cleric, 300 gp diamond); the temple's *Raise Dead* (level 2, within
+  14 real days, 1 HP + 2 exhaustion) and *Resurrection* (level 3, no time limit, full health); and the **Phoenix Feather**
+  (150 Embers, once per hero, not on Hard/Brutal/Hardcore). Temple prices climb with every death, and every return leaves
+  a mark: −1 to death saving throws per return (max −3). **Hardcore** (campaign-wide or per hero): death is final.
 
 ## The AI DM harness
 

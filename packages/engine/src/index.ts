@@ -14,3 +14,4 @@ export * from "./campaign/types.js";
 export * from "./campaign/adventure.js";
 export * from "./api.js";
 export * from "./rewards.js";
+export * from "./rules/death.js";

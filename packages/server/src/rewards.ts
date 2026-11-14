@@ -1,5 +1,6 @@
 // Embers wallet and the Curio Shop: earning, buying, equipping and using rewards.
 import {
+  phoenixAllowed, reviveSheet, graveMarks, type DeathRuleContext,
   CLASSES, DEFAULT_BACKDROP, DEFAULT_DICE, EMBER_RULES, REWARD_BY_ID, SPECIES, logEntry,
   type AdventureState, type CharacterSheet, type RewardsView,
 } from "@tavern/engine";
@@ -110,7 +111,7 @@ export class Rewards {
   }
 
   /** Story perks applied to one of the player's heroes. */
-  async use(u: UserRecord, itemId: string, characterId: string, text: string | undefined, campaign: { week: number; chronicle: { week: number; text: string }[] }): Promise<string> {
+  async use(u: UserRecord, itemId: string, characterId: string, text: string | undefined, campaign: { week: number; chronicle: { week: number; text: string }[] }, rules: DeathRuleContext = { hardcore: false }): Promise<string> {
     const item = REWARD_BY_ID[itemId];
     if (!item || item.kind !== "story" || itemId === "story:map") throw bad("That can't be used on a hero.");
     const s = this.store.characters.get(characterId);
@@ -127,7 +128,19 @@ export class Rewards {
         this.award(u, -item.price, `${item.name} for ${s.name}`);
       }
     };
+    if (s.dead && itemId !== "story:phoenix" && itemId !== "story:ballad") throw bad(`${s.name} is dead. A Phoenix Feather or the temple might help.`);
     switch (itemId) {
+      case "story:phoenix": {
+        const ok = phoenixAllowed(rules, s);
+        if (!ok.ok) throw bad(ok.reason!);
+        pay();
+        reviveSheet(s, { exhaustion: 2 });
+        s.phoenixUsed = true;
+        this.store.saveCharacter(s);
+        this.store.saveUser(u);
+        campaign.chronicle.push({ week: campaign.week, text: `A Phoenix Feather blazed over ${s.name}'s body — and they rose from the ashes.` });
+        return `${s.name} rises in a burst of golden fire! (1 HP, 2 levels of exhaustion; −${graveMarks(s)} to death saves from now on.)`;
+      }
       case "story:inspiration": {
         if (s.heroicInspiration) throw bad(`${s.name} already has Heroic Inspiration.`);
         pay();

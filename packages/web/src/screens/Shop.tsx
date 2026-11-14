@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { REWARDS, type RewardItem, type RewardsView } from "@tavern/engine";
+import { REWARDS, phoenixAllowed, type RewardItem, type RewardsView } from "@tavern/engine";
 import type { AppCtx } from "../App";
 import { api, attempt, toast } from "../api";
 import { Modal, Pill } from "../components/ui";
@@ -56,7 +56,7 @@ export function Shop({ ctx }: { ctx: AppCtx }) {
                 ) : (
                   <span className="row">{count > 0 && <Pill>{count} owned</Pill>}
                     {item.consumable && <button disabled={!afford || count >= (item.max ?? 99)} onClick={() => act("/rewards/buy", { itemId: item.id })}>Buy</button>}
-                    <button className="primary" disabled={!ctx.characters.length || (!count && !afford)} onClick={() => setUsing(item)}>Use on a hero</button>
+                    <button className="primary" disabled={!ctx.characters.length || (!count && !afford)} onClick={() => setUsing(item)}>{item.id === "story:phoenix" ? "Use on a fallen hero" : "Use on a hero"}</button>
                   </span>
                 )}
               </div>
@@ -97,12 +97,14 @@ function Preview({ item }: { item: RewardItem }) {
       </div>
     );
   }
-  const icon: Record<string, string> = { "story:map": "🗺", "story:inspiration": "✨", "story:epithet": "🏷", "story:ballad": "🎻" };
+  const icon: Record<string, string> = { "story:phoenix": "🪶", "story:map": "🗺", "story:inspiration": "✨", "story:epithet": "🏷", "story:ballad": "🎻" };
   return <div className="shop-preview story-preview">{icon[item.id] ?? "📜"}</div>;
 }
 
 function UseDialog({ ctx, item, onClose, onUse }: { ctx: AppCtx; item: RewardItem; onClose: () => void; onUse: (characterId: string, text?: string) => void }) {
-  const heroes = ctx.characters.filter((c) => !c.retired && !c.dead);
+  const phoenix = item.id === "story:phoenix";
+  const rules = { hardcore: !!ctx.campaign?.campaign.settings.hardcore, difficulty: ctx.campaign?.campaign.settings.difficulty };
+  const heroes = ctx.characters.filter((c) => !c.retired && (phoenix ? c.dead : !c.dead || item.id === "story:ballad"));
   const [who, setWho] = useState(heroes[0]?.id ?? "");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -119,9 +121,11 @@ function UseDialog({ ctx, item, onClose, onUse }: { ctx: AppCtx; item: RewardIte
           <input value={text} onChange={(e) => setText(e.target.value)} maxLength={32} placeholder="the Unbroken" autoFocus />
         </label>
       )}
+      {phoenix && !heroes.length && <p className="small muted">None of your heroes has fallen. (Keep it that way.)</p>}
+      {phoenix && who && (() => { const chk = phoenixAllowed(rules, heroes.find((h) => h.id === who)!); return chk.ok ? <p className="small muted">They'll come back with 1 HP, 2 levels of exhaustion and a lasting −1 to death saves.</p> : <p className="error">{chk.reason}</p>; })()}
       {item.id === "story:ballad" && <p className="small muted">The bard writes it from your hero's real deeds; it's added to their backstory and the campaign chronicle.</p>}
       <div className="row">
-        <button className="primary" disabled={!who || busy || (item.needsText && text.trim().length < 3)} onClick={async () => { setBusy(true); await onUse(who, text); setBusy(false); }}>
+        <button className="primary" disabled={!who || busy || (item.needsText && text.trim().length < 3) || (phoenix && !phoenixAllowed(rules, heroes.find((h) => h.id === who)!).ok)} onClick={async () => { setBusy(true); await onUse(who, text); setBusy(false); }}>
           {busy ? "Working…" : `Use (${item.price} Embers${item.consumable ? " if you don't own one" : ""})`}
         </button>
         <button onClick={onClose}>Cancel</button>

@@ -2,7 +2,7 @@ import { TavernScene, CampaignMapArt, BuildingArt } from "../components/art/Tave
 import { Portrait } from "../components/art/Portrait";
 import { useMemo, useState } from "react";
 import type { AdventureSummary, AdventureView, CharacterSheet, NewAdventureRequest, ScenarioSummary } from "@tavern/engine";
-import { CLASSES, itemName } from "@tavern/engine";
+import { CLASSES, itemName, RAISE_DEAD_DAYS, daysDead, phoenixAllowed, raiseDeadCost, resurrectionCost } from "@tavern/engine";
 import type { AppCtx } from "../App";
 import { api, attempt, toast } from "../api";
 import { CLASS_ICON, HpBar, Modal, Pill, classLabel } from "../components/ui";
@@ -359,14 +359,35 @@ function TownPanel({ ctx }: { ctx: AppCtx }) {
             <>
               <h3>The fallen</h3>
               <ul className="shop">
-                {dead.map((d) => (
-                  <li key={d.id}>
-                    <span>💀 {d.name} — {CLASSES[d.classId].name} {d.level}{d.hardcore || c.settings.hardcore ? " (hardcore: cannot return)" : ""}</span>
-                    <button disabled={d.hardcore || c.settings.hardcore || !campaign.services.includes("service:raiseDead")} onClick={() => post("/town/raise", { characterId: d.id })}>Raise Dead</button>
-                  </li>
-                ))}
+                {dead.map((d) => {
+                  const hard = d.hardcore || c.settings.hardcore;
+                  const left = RAISE_DEAD_DAYS - daysDead(d);
+                  const canRaise = !hard && campaign.services.includes("service:raiseDead") && left > 0;
+                  const canRes = !hard && campaign.services.includes("service:resurrection");
+                  const feather = phoenixAllowed({ hardcore: c.settings.hardcore, difficulty: c.settings.difficulty }, d);
+                  return (
+                    <li key={d.id} className="fallen">
+                      <span>💀 <strong>{d.name}</strong>{d.epithet ? ` ${d.epithet}` : ""} — {CLASSES[d.classId].name} {d.level}
+                        {hard ? " · hardcore: cannot return"
+                          : d.diedAt ? (left > 0 ? ` · ${Math.ceil(left)} day${Math.ceil(left) === 1 ? "" : "s"} left for Raise Dead` : " · too long for Raise Dead")
+                          : ""}
+                        {d.deathCount > 0 && <> · <span title="Each return from death: −1 to death saving throws (max −3)">⚰ returned {d.deathCount}×</span></>}
+                      </span>
+                      {!hard && (
+                        <span className="row">
+                          <button disabled={!canRaise} title={canRaise ? "" : "Needs temple level 2 and a body less than 14 days dead"} onClick={() => post("/town/raise", { characterId: d.id, rite: "raise" })}>Raise Dead · {raiseDeadCost(d)} gp</button>
+                          {canRes && <button onClick={() => post("/town/raise", { characterId: d.id, rite: "resurrect" })}>Resurrection · {resurrectionCost(d)} gp</button>}
+                          {d.ownerId === ctx.user.id && feather.ok && <button className="primary" onClick={() => ctx.go({ name: "shop" })} title="Use a Phoenix Feather from the Curio Shop">🪶 Phoenix Feather</button>}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
-              {!campaign.services.includes("service:raiseDead") && <p className="small muted">The temple must be upgraded before it can perform Raise Dead (needs a 500 gp diamond).</p>}
+              <p className="small muted">
+                Raise Dead (temple level 2): within {RAISE_DEAD_DAYS} days, returns with 1 HP and 2 levels of exhaustion. Resurrection (temple level 3): no time limit, full health.
+                Each costs more for every earlier death, and every return leaves a mark: −1 to death saves (max −3).
+              </p>
             </>
           )}
         </section>

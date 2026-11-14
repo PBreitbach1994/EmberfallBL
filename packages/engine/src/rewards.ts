@@ -64,6 +64,8 @@ export const REWARDS: RewardItem[] = [
     description: "Give one of your heroes Heroic Inspiration: their next failed check is rerolled." },
   { id: "story:epithet", kind: "story", name: "Hero's Epithet", price: 50, needsCharacter: true, needsText: true,
     description: "Give a hero a title the whole tavern will use — “Torvald the Unbroken”." },
+  { id: "story:phoenix", kind: "story", name: "Phoenix Feather", price: 150, needsCharacter: true,
+    description: "Burn it over a fallen hero and they rise — 1 HP and 2 levels of exhaustion, like a temple raising. Once per hero, ever. Not on Hard or Brutal difficulty, or in Hardcore." },
   { id: "story:ballad", kind: "story", name: "Bard's Ballad", price: 75, needsCharacter: true,
     description: "Commission a ballad of your hero's deeds. It's sung in the tavern and written into the campaign chronicle." },
 ];

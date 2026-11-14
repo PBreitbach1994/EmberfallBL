@@ -185,8 +185,12 @@ export interface CharacterSheet {
   conditions: Condition[];
   exhaustion: number;
   createdAt: number;
-  /** campaign week the character died (Raise Dead window) */
+  /** campaign week the character died (legacy) */
   diedWeek?: number;
+  /** when the character died (Raise Dead window is measured from this) */
+  diedAt?: number;
+  /** a Phoenix Feather has already been used on this hero */
+  phoenixUsed?: boolean;
   /** id of the adventure the character is currently on */
   activeAdventureId?: string;
   /** AI personality prompt for companions */
@@ -345,6 +349,8 @@ export interface Combatant {
   xp?: number;
   heroicInspiration?: boolean;
   lastAttackerId?: string;
+  /** penalty to death saving throws from previous deaths ("Returned from the Grave") */
+  deathSaveMod?: number;
   speciesTraits?: string[];
   /** Druid Wild Shape: original statistics to restore */
   wildShape?: { ac: number; abilities: AbilityScores; speed: number; attacks: AttackOption[]; size: Size };

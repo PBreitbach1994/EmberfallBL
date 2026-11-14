@@ -138,7 +138,7 @@ app.post("/api/rewards/buy", wrap((req) => ({ message: game.rewards.buy(req.user
 app.post("/api/rewards/equip", wrap((req) => ({ message: game.rewards.equip(req.user, String(req.body?.itemId)), rewards: game.rewards.view(req.user) })));
 app.post("/api/rewards/use", wrap(async (req) => {
   const c = game.campaign();
-  const message = await game.rewards.use(req.user, String(req.body?.itemId), String(req.body?.characterId), req.body?.text, c);
+  const message = await game.rewards.use(req.user, String(req.body?.itemId), String(req.body?.characterId), req.body?.text, c, { hardcore: c.settings.hardcore, difficulty: c.settings.difficulty });
   store.saveCampaign(c);
   game.broadcastCampaign();
   return { message, rewards: game.rewards.view(req.user) };
@@ -355,7 +355,7 @@ app.post("/api/town/build", townOp((req) => town.build(String(req.body?.building
 app.post("/api/town/buy", townOp((req) => town.buy(req.user, String(req.body?.characterId), String(req.body?.itemId))));
 app.post("/api/town/sell", townOp((req) => town.sell(req.user, String(req.body?.characterId), String(req.body?.itemId))));
 app.post("/api/town/donate", townOp((req) => town.donate(req.user, String(req.body?.characterId), Number(req.body?.amount))));
-app.post("/api/town/raise", townOp((req) => town.raiseDead(req.user, String(req.body?.characterId))));
+app.post("/api/town/raise", townOp((req) => town.raiseDead(req.user, String(req.body?.characterId), req.body?.rite === "resurrect" ? "resurrect" : "raise")));
 app.post("/api/campaign/settings", wrap((req) => {
   if (!req.user.isAdmin) throw new HttpError(403, "Only the campaign owner can change settings.");
   const c = game.campaign();

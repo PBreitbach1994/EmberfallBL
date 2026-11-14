@@ -528,7 +528,7 @@ export class Game {
       const s = this.store.characters.get(p.characterId);
       if (!s) continue;
       s.activeAdventureId = undefined;
-      if (s.dead && s.diedWeek === undefined) s.diedWeek = c.week;
+      if (s.dead && s.diedWeek === undefined) { s.diedWeek = c.week; s.diedAt = Date.now(); }
       // tavern companions belong to no one: they recover and train between jobs
       if (s.ownerId === "ai" && !s.dead) {
         longRest(s);

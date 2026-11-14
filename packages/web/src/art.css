@@ -304,3 +304,6 @@ button:not(.linkbtn):active:not(:disabled) { transform: translateY(1px); }
 .ledger .minus { color: #ff9a8a; font-weight: 700; display: inline-block; min-width: 3.2em; }
 .embers-btn { color: #ffcf7a; font-weight: 700; }
 .epithet { font-style: italic; color: #d9b45a; font-weight: 400; }
+
+.grave-mark { margin: 2px 0 0; color: #c9b0ff; font-size: 0.9em; }
+li.fallen { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; }

@@ -5,7 +5,7 @@ import {
   type CampaignView, type CharacterSheet, type ClassId, type CreateCharacterRequest, type ShopItem, type LevelUpRequest,
 } from "@tavern/engine";
 import { BUILDINGS, PERSONAL_QUESTS, SCENARIOS, WORLD } from "@tavern/engine/content";
-import { scenarioAvailable, EMBER_RULES } from "@tavern/engine";
+import { scenarioAvailable, EMBER_RULES, RAISE_DEAD_DAYS, daysDead, graveMarks, raiseDeadCost, resurrectionCost, reviveSheet } from "@tavern/engine";
 import { HttpError, type Game } from "./game.js";
 import { aiAvailable } from "./dm.js";
 import { newId, type UserRecord } from "./store.js";
@@ -146,31 +146,34 @@ export class Town {
     return `${s.name} donates ${amt} gp to the Emberfall treasury.`;
   }
 
-  raiseDead(user: UserRecord, characterId: string): string {
+  /** Temple services for the dead: Raise Dead (temple 2, 14-day window) or Resurrection (temple 3, no limit). */
+  raiseDead(user: UserRecord, characterId: string, rite: "raise" | "resurrect" = "raise"): string {
     const s = this.store.characters.get(characterId);
     if (!s) throw new HttpError(404, "No such character.");
     if (s.ownerId !== user.id && s.ownerId !== "ai") throw new HttpError(403, "Not your character.");
     if (!s.dead) throw bad(`${s.name} isn't dead.`);
     if (this.campaign.settings.hardcore || s.hardcore) throw bad("Hardcore mode: death is final. Honour them on the tavern wall.");
-    if (!this.services().includes("service:raiseDead")) throw bad("The temple must be upgraded to perform Raise Dead.");
-    const weeksGone = this.campaign.week - (s.diedWeek ?? this.campaign.week);
-    if (weeksGone > 2) throw bad(`${s.name} has been dead too long (Raise Dead works within 10 days — two weeks of campaign time).`);
-    // payment: the character's own gold, else the owner's other characters
-    const cost = 500;
+    if (!s.diedAt) { s.diedAt = Date.now(); this.store.saveCharacter(s); } // heroes who died before the window was tracked get a fresh one
+    const resurrect = rite === "resurrect";
+    if (resurrect && !this.services().includes("service:resurrection")) throw bad("Only a level 3 temple can perform Resurrection.");
+    if (!resurrect && !this.services().includes("service:raiseDead")) throw bad("The temple must be upgraded to perform Raise Dead.");
+    if (!resurrect && daysDead(s) > RAISE_DEAD_DAYS) throw bad(`${s.name} has been dead more than ${RAISE_DEAD_DAYS} days — only Resurrection (temple level 3) can bring them back now.`);
+    const cost = resurrect ? resurrectionCost(s) : raiseDeadCost(s);
+    // payment: the character's own gold, then the player's other living heroes
     const payers = [s, ...[...this.store.characters.values()].filter((x) => x.ownerId === user.id && x.id !== s.id && !x.dead)];
     const total = payers.reduce((n, p) => n + p.gold, 0);
-    if (total < cost) throw bad(`Raise Dead consumes a 500 gp diamond. Your characters have ${Math.floor(total)} gp between them.`);
+    const why = s.deathCount ? ` (${resurrect ? 1000 : 500} gp, +${resurrect ? 500 : 250} for each of ${s.name}'s ${s.deathCount} earlier death${s.deathCount === 1 ? "" : "s"})` : "";
+    if (total < cost) throw bad(`${resurrect ? "Resurrection" : "Raise Dead"} costs ${cost} gp${why}. Your heroes have ${Math.floor(total)} gp between them.`);
     let owed = cost;
     for (const p of payers) { const pay = Math.min(p.gold, owed); p.gold -= pay; owed -= pay; this.store.saveCharacter(p); if (!owed) break; }
-    s.dead = false;
-    s.hp = 1;
-    s.deathCount++;
-    s.exhaustion = Math.min(6, s.exhaustion + 2); // the 2024 spell's −4 penalty, modelled as exhaustion that long rests remove
-    s.diedWeek = undefined;
+    reviveSheet(s, resurrect ? { exhaustion: 0, fullHp: true } : { exhaustion: 2 });
     this.store.saveCharacter(s);
-    this.campaign.chronicle.push({ week: this.campaign.week, text: `${s.name} was raised from death at the Temple of the Dawnfather.` });
+    this.campaign.chronicle.push({ week: this.campaign.week, text: `${s.name} was ${resurrect ? "resurrected" : "raised from death"} at the Temple of the Dawnfather${s.deathCount > 1 ? ` — their ${ordinal(s.deathCount)} return from the grave` : ""}.` });
     this.store.saveCampaign(this.campaign);
-    return `${s.name} draws a ragged breath and opens their eyes. (1 HP, 2 levels of exhaustion that fade with long rests.)`;
+    const mark = ` They carry the mark of the grave: −${graveMarks(s)} to death saving throws.`;
+    return resurrect
+      ? `${s.name} rises whole and hale, light pouring from their eyes. (Full HP.)${mark}`
+      : `${s.name} draws a ragged breath and opens their eyes. (1 HP, 2 levels of exhaustion that fade with long rests.)${mark}`;
   }
 
   // ------------------------------------------------------------------------------------------
@@ -336,3 +339,5 @@ function randomName() {
 }
 
 export { logEntry, type ShopItem };
+
+function ordinal(n: number) { return n === 2 ? "second" : n === 3 ? "third" : `${n}th`; }
