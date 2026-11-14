@@ -16,7 +16,7 @@ export type AuthConfig =
 
 export interface AdminOverview {
   authMode: "access" | "invite";
-  users: (UserInfo & { createdAt: number; lastSeen?: number; characters: number })[];
+  users: (UserInfo & { createdAt: number; lastSeen?: number; characters: number; embers?: number })[];
   characters: CharacterSheet[];
   adventures: { id: string; title: string; status: string; dmMode: string; startedAt: number; updatedAt: number; host: string; autonomous: boolean; party: { name: string; player: string }[] }[];
 }
@@ -60,7 +60,9 @@ export interface AdventureView {
   log: LogEntry[];
   thinking: boolean;
   openSeats: number;
-  summary?: { xp: number; gold: number; outcome: string };
+  summary?: { xp: number; gold: number; outcome: string; embers?: number };
+  /** dice skin per roller (character id and combatant id) so everyone sees each player's dice */
+  diceSkins?: Record<string, string>;
 }
 
 export interface AdventureSummary {
@@ -127,6 +129,7 @@ export interface NewAdventureRequest {
   dmMode: DmMode;               // "ai" (Claude DM), "scripted" (no API key), "human" (requester DMs)
   openSeats: number;            // seats friends may join
   autonomous?: boolean;         // AI-only party plays on its own
+  useMap?: boolean;             // spend a Pathfinder's Map to skip the road event
 }
 
 export type ServerMessage =

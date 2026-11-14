@@ -5,7 +5,7 @@ import {
   type CampaignView, type CharacterSheet, type ClassId, type CreateCharacterRequest, type ShopItem, type LevelUpRequest,
 } from "@tavern/engine";
 import { BUILDINGS, PERSONAL_QUESTS, SCENARIOS, WORLD } from "@tavern/engine/content";
-import { scenarioAvailable } from "@tavern/engine";
+import { scenarioAvailable, EMBER_RULES } from "@tavern/engine";
 import { HttpError, type Game } from "./game.js";
 import { aiAvailable } from "./dm.js";
 import { newId, type UserRecord } from "./store.js";
@@ -239,6 +239,7 @@ export class Town {
     try {
       const notes = levelUp(s, req);
       this.store.saveCharacter(s);
+      this.game.rewards.award(user, EMBER_RULES.levelUp, `${s.name} reached level ${s.level}`);
       return { character: s, notes };
     } catch (e) { throw bad((e as Error).message); }
   }
@@ -294,6 +295,7 @@ export class Town {
     if (u.kind === "scenario" && !c.unlockedScenarios.includes(u.scenarioId)) c.unlockedScenarios.push(u.scenarioId);
     if (u.kind === "prestige") { user.prestigePerks = [...(user.prestigePerks ?? []), u.perk]; this.store.saveUser(user); }
     c.prosperity += 1;
+    this.game.rewards.award(user, EMBER_RULES.retire, `${s.name} retired a legend`);
     c.chronicle.push({ week: c.week, text: `${s.name} retires from adventuring, their quest "${q.name}" fulfilled. ${q.unlockText}` });
     this.store.saveCharacter(s);
     this.store.saveCampaign(c);

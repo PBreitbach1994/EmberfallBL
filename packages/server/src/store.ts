@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { AdventureState, CampaignState, CharacterSheet } from "@tavern/engine";
+import type { Wallet } from "./rewards.js";
 
 export interface UserRecord {
   id: string;
@@ -20,6 +21,8 @@ export interface UserRecord {
   lastSeen?: number;
   /** access removed by the campaign owner (kept so characters survive; re-invite restores it) */
   revoked?: boolean;
+  /** Embers wallet and Curio Shop purchases */
+  wallet?: Wallet;
 }
 
 type Kind = "user" | "character" | "campaign" | "adventure" | "meta";

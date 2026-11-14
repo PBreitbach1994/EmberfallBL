@@ -48,7 +48,7 @@ export function Adventure({ ctx, id }: { ctx: AppCtx; id: string }) {
 
   return (
     <div className="adventure">
-      <Dice log={view.log} combatLog={view.encounter?.log} />
+      <Dice log={view.log} combatLog={view.encounter?.log} skins={view.diceSkins} />
       <div className="adv-head panel">
         <div>
           <h1>{view.title}</h1>
@@ -70,7 +70,7 @@ export function Adventure({ ctx, id }: { ctx: AppCtx; id: string }) {
         <section className="panel summary">
           <h2>{view.status === "complete" ? "🏆 Victory" : view.status === "retreated" ? "🏳 Retreat" : "☠ Defeat"}</h2>
           {view.summary && <p>{view.summary.outcome}</p>}
-          {view.summary && <div className="row"><Pill>{view.summary.xp} XP</Pill><Pill>{view.summary.gold} gp</Pill></div>}
+          {view.summary && <div className="row"><Pill>{view.summary.xp} XP</Pill><Pill>{view.summary.gold} gp</Pill>{view.summary.embers ? <Pill>🔥 +{view.summary.embers} Embers</Pill> : null}</div>}
           <button className="primary" onClick={() => { ctx.refreshCampaign(); ctx.refreshCharacters(); ctx.go({ name: "tavern" }); }}>Return to the tavern</button>
         </section>
       )}

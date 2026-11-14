@@ -13,3 +13,4 @@ export * from "./rules/checks.js";
 export * from "./campaign/types.js";
 export * from "./campaign/adventure.js";
 export * from "./api.js";
+export * from "./rewards.js";

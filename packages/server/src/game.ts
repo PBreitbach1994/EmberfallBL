@@ -10,6 +10,8 @@ import {
 import { BUILDINGS, EVENTS, PERSONAL_QUESTS, SCENARIOS } from "@tavern/engine/content";
 import { aiAvailable, chronicle, companionDecide, companionsReact, handlePlayerAction, logNarration, narrateScene } from "./dm.js";
 import { newId, type Store, type UserRecord } from "./store.js";
+import { Rewards } from "./rewards.js";
+import { DEFAULT_DICE, EMBER_RULES } from "@tavern/engine";
 
 export const CAMPAIGN_ID = "emberfall";
 
@@ -26,8 +28,10 @@ export class Game {
   private aiRunners = new Set<string>();
   broadcast: Broadcaster = () => {};
   broadcastCampaign: () => void = () => {};
+  rewards: Rewards;
 
   constructor(public store: Store) {
+    this.rewards = new Rewards(store);
     this.ensureCampaign();
     this.ensureCompanions();
     // abandoned adventures (no activity for 12h) retreat automatically so shared companions are freed
@@ -154,10 +158,17 @@ export class Game {
     const card = adv.pendingEvent ? EVENTS[adv.pendingEvent] : undefined;
     const users = this.store.users;
     const summary = adv.status === "complete" || adv.status === "failed" || adv.status === "retreated"
-      ? { xp: adv.earnedXp, gold: adv.earnedGold, outcome: adv.status === "complete" ? "Victory" : adv.status === "retreated" ? "Retreated" : "Defeat" } : undefined;
+      ? { xp: adv.earnedXp, gold: adv.earnedGold, outcome: adv.status === "complete" ? "Victory" : adv.status === "retreated" ? "Retreated" : "Defeat", embers: adv.embersAwarded?.[userId] } : undefined;
+    const diceSkins: Record<string, string> = {};
+    for (const p of adv.party) {
+      const owner = p.controller.kind === "human" ? users.get(p.controller.userId) : undefined;
+      const skin = owner?.wallet?.equipped.dice ?? DEFAULT_DICE;
+      diceSkins[p.characterId] = skin;
+      diceSkins[`pc-${p.characterId}`] = skin;
+    }
     return {
       id: adv.id, title: adv.title, scenarioId: adv.scenarioId, status: adv.status, dmMode: adv.dmMode, hostUserId: adv.hostUserId,
-      dmUserId: adv.dmUserId, autonomous: adv.autonomous, openSeats: adv.openSeats, summary,
+      dmUserId: adv.dmUserId, autonomous: adv.autonomous, openSeats: adv.openSeats, summary, diceSkins,
       event: card ? { id: card.id, title: card.title, text: card.text, options: eventOptions(adv, ctx, card) } : undefined,
       node: node ? {
         id: node.id, title: node.title, narration: adv.narration[node.id] ?? node.text,
@@ -230,7 +241,10 @@ export class Game {
     adv.openSeats = Math.max(0, Math.min(4, req.openSeats ?? 0));
     for (const p of party) { const s = this.store.characters.get(p.characterId)!; s.activeAdventureId = adv.id; }
     // Frosthaven-style road event on the way (the tutorial starts in the tavern itself)
-    if (scenario.id !== "cellar") adv.pendingEvent = this.drawRoadEvent();
+    if (scenario.id !== "cellar") {
+      if (req.useMap && this.rewards.spendMap(user)) adv.log.push(logEntry("system", `🗺 ${user.name}'s Pathfinder's Map leads the party around trouble on the road.`));
+      else adv.pendingEvent = this.drawRoadEvent();
+    }
     if (adv.pendingEvent) {
       const card = EVENTS[adv.pendingEvent];
       adv.log.push(logEntry("system", `🛤 On the road: ${card.title}`));
@@ -523,6 +537,7 @@ export class Game {
       this.checkQuest(s, adv);
       this.store.saveCharacter(s);
     }
+    if (!adv.autonomous && !adv.embersAwarded) this.rewards.awardAdventure(adv, c.settings.difficulty ?? "normal");
     if (adv.autonomous && aiAvailable()) {
       try {
         const tale = await chronicle(adv, this.ctx(adv));
@@ -542,6 +557,7 @@ export class Game {
     const done = Object.entries(q.goals).every(([k, v]) => (pq.counters[k] ?? 0) >= v);
     if (done) {
       pq.complete = true;
+      this.rewards.award(this.store.users.get(s.ownerId), EMBER_RULES.questComplete, `${s.name} fulfilled their personal quest`);
       adv?.log.push(logEntry("level", `🌟 ${s.name} has fulfilled their personal quest "${q.name}"! They may retire at the tavern.`, s.id));
     }
   }

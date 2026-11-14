@@ -50,7 +50,7 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
           <p className="muted">Link each player's sign-in email so they land on their existing account when they sign in. If someone made a second account by accident, merge it into the right one — characters and adventures move with it.</p>
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Name</th><th>Sign-in email</th><th>Access</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
+              <thead><tr><th>Name</th><th>Sign-in email</th><th>Access</th><th>🔥 Embers</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
               <tbody>
                 {data.users.filter((u) => !f || u.name.toLowerCase().includes(f) || (u.email ?? "").includes(f)).map((u) => (
                   <tr key={u.id}>
@@ -62,6 +62,10 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
                         ? <button className="linkbtn" onClick={() => post(`/admin/users/${u.id}/access`, { grant: true })}>Restore</button>
                         : <button className="linkbtn" onClick={() => { if (confirm(`Remove ${u.name}'s access? Their characters are kept and you can restore them later.`)) post(`/admin/users/${u.id}/access`, { grant: false }); }}>Remove</button>)}
                       {!u.revoked && u.email && access?.configured && !access.error && !access.emails.includes(u.email) && <button className="linkbtn" onClick={() => post(`/admin/users/${u.id}/access`, { grant: true })}>Add to list</button>}
+                    </td>
+                    <td>
+                      {u.embers ?? 0}{" "}
+                      <button className="linkbtn" onClick={() => { const v = prompt(`Give ${u.name} how many Embers? (negative to take)`, "25"); const n = Number(v); if (v && n) post(`/admin/users/${u.id}/embers`, { amount: n }); }}>Gift</button>
                     </td>
                     <td>{u.characters}</td>
                     <td className="small">{when(u.lastSeen)}</td>

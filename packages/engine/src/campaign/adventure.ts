@@ -51,6 +51,8 @@ export interface AdventureState {
   /** a road event drawn before the scenario begins (Frosthaven-style) */
   pendingEvent?: string;
   openSeats: number;
+  /** Embers paid out to each human player when the adventure ended (userId -> amount) */
+  embersAwarded?: Record<string, number>;
 }
 
 export interface AdventureContext {

@@ -183,6 +183,8 @@ function StartAdventure({ ctx, scenario, onClose }: { ctx: AppCtx; scenario: Sce
   const [dmMode, setDmMode] = useState<NewAdventureRequest["dmMode"]>(ctx.campaign?.aiAvailable ? "ai" : "scripted");
   const [seats, setSeats] = useState(0);
   const [autonomous, setAutonomous] = useState(false);
+  const maps = ctx.rewards?.consumables["story:map"] ?? 0;
+  const [useMap, setUseMap] = useState(false);
   const [busy, setBusy] = useState(false);
   const max = ctx.campaign?.campaign.settings.maxPartySize ?? 6;
   const total = (autonomous ? 0 : heroes.length) + comps.length + seats;
@@ -197,6 +199,7 @@ function StartAdventure({ ctx, scenario, onClose }: { ctx: AppCtx; scenario: Sce
       dmMode: dmMode === "human" && autonomous ? "scripted" : dmMode,
       openSeats: autonomous ? 0 : seats,
       autonomous,
+      useMap: useMap && maps > 0 && !autonomous,
     };
     const r = await attempt(() => api<{ view: AdventureView }>("/adventures", { body }));
     setBusy(false);
@@ -207,6 +210,7 @@ function StartAdventure({ ctx, scenario, onClose }: { ctx: AppCtx; scenario: Sce
     <Modal title={`Take the job: ${scenario.name}`} onClose={onClose} wide>
       <p className="hook">“{scenario.hook.replace(/^["“]+|["”]+$/g, "")}”</p>
       <p>{scenario.summary}</p>
+      {maps > 0 && !autonomous && scenario.id !== "cellar" && <label className="check"><input type="checkbox" checked={useMap} onChange={(e) => setUseMap(e.target.checked)} /> 🗺 Use a Pathfinder's Map — skip the road event ({maps} left)</label>}
       <label className="check"><input type="checkbox" checked={autonomous} onChange={(e) => setAutonomous(e.target.checked)} /> Send an autonomous AI party (they play it out on their own; read the tale later)</label>
       {!autonomous && (
         <>

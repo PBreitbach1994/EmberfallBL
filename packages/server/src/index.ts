@@ -132,6 +132,18 @@ app.get("/api/health", (_req, res) => { res.json({ ok: true, ai: aiAvailable() }
 app.use("/api", auth);
 app.get("/api/me", wrap((req) => ({ user: publicUser(req.user) })));
 
+// ---- Embers & the Curio Shop
+app.get("/api/rewards", wrap((req) => game.rewards.view(req.user)));
+app.post("/api/rewards/buy", wrap((req) => ({ message: game.rewards.buy(req.user, String(req.body?.itemId)), rewards: game.rewards.view(req.user) })));
+app.post("/api/rewards/equip", wrap((req) => ({ message: game.rewards.equip(req.user, String(req.body?.itemId)), rewards: game.rewards.view(req.user) })));
+app.post("/api/rewards/use", wrap(async (req) => {
+  const c = game.campaign();
+  const message = await game.rewards.use(req.user, String(req.body?.itemId), String(req.body?.characterId), req.body?.text, c);
+  store.saveCampaign(c);
+  game.broadcastCampaign();
+  return { message, rewards: game.rewards.view(req.user) };
+}));
+
 // ---- the company: everyone can see who's adventuring
 app.get("/api/roster", wrap(() => {
   const owners = store.users;
@@ -151,7 +163,7 @@ app.get("/api/admin/overview", wrap((req) => {
   const chars = [...store.characters.values()];
   return {
     authMode: ACCESS ? "access" : "invite",
-    users: [...store.users.values()].map((u) => ({ ...publicUser(u), createdAt: u.createdAt, lastSeen: u.lastSeen, characters: chars.filter((c) => c.ownerId === u.id).length })),
+    users: [...store.users.values()].map((u) => ({ ...publicUser(u), createdAt: u.createdAt, lastSeen: u.lastSeen, characters: chars.filter((c) => c.ownerId === u.id).length, embers: game.rewards.wallet(u).embers })),
     characters: chars,
     adventures: [...store.adventures.values()].sort((a, b) => b.updatedAt - a.updatedAt).map((a) => ({
       id: a.id, title: a.title, status: a.status, dmMode: a.dmMode, startedAt: a.startedAt, updatedAt: a.updatedAt,
@@ -290,6 +302,17 @@ app.post("/api/admin/users/:id/merge", wrap((req) => {
   store.deleteUser(from.id);
   game.broadcastCampaign();
   return { ok: true, message: `Moved ${moved} character(s) from ${from.name} to ${into.name}.` };
+}));
+
+app.post("/api/admin/users/:id/embers", wrap((req) => {
+  requireAdmin(req);
+  const u = store.users.get(req.params.id);
+  if (!u) throw new HttpError(404, "No such player.");
+  const amount = Math.round(Number(req.body?.amount));
+  if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > 10000) throw new HttpError(400, "Enter an amount between -10000 and 10000.");
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 80) || (amount > 0 ? `A gift from ${req.user.name}` : `Adjusted by ${req.user.name}`);
+  game.rewards.award(u, amount, reason);
+  return { ok: true, message: `${amount > 0 ? "Gave" : "Took"} ${Math.abs(amount)} Embers ${amount > 0 ? "to" : "from"} ${u.name}.` };
 }));
 
 app.post("/api/admin/characters/:id/owner", wrap((req) => {

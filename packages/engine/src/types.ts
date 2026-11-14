@@ -191,6 +191,8 @@ export interface CharacterSheet {
   activeAdventureId?: string;
   /** AI personality prompt for companions */
   aiPersona?: string;
+  /** title bought in the Curio Shop, e.g. "the Unbroken" */
+  epithet?: string;
 }
 
 // ---------------------------------------------------------------------------

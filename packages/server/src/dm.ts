@@ -327,6 +327,17 @@ export async function chronicle(adv: AdventureState, ctx: AdventureContext): Pro
   return textOf(msg);
 }
 
+/** A short ballad about a hero for the Curio Shop's Bard's Ballad. */
+export async function writeBallad(facts: Record<string, unknown>): Promise<string> {
+  const msg = await callClaude({
+    effort: "low",
+    maxTokens: 800,
+    messages: [{ role: "user", content: `Write a rousing tavern ballad (6-8 short rhyming lines, no title, no commentary) about this adventurer, true to these facts and nothing more:\n${JSON.stringify(facts)}` }],
+  });
+  if (msg.stop_reason === "refusal") return "";
+  return textOf(msg).slice(0, 1200);
+}
+
 export function logNarration(adv: AdventureState, text: string, nodeId?: string): LogEntry {
   const e = logEntry("narration", text, undefined, { ai: true, nodeId });
   adv.log.push(e);

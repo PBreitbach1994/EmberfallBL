@@ -45,7 +45,7 @@ export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
           <div className="sheet-title">
             <Portrait seed={sheet.id} species={sheet.species} classId={sheet.classId} size={96} dead={sheet.dead} />
             <div>
-            <h1>{sheet.name} {sheet.prestige > 0 && <span className="prestige">{"★".repeat(sheet.prestige)}</span>}</h1>
+            <h1>{sheet.name}{sheet.epithet && <span className="epithet"> {sheet.epithet}</span>} {sheet.prestige > 0 && <span className="prestige">{"★".repeat(sheet.prestige)}</span>}</h1>
             <div className="muted">{classLabel(sheet)}{sheet.subclass ? ` (${cls.subclass.name})` : ""} · {BACKGROUNDS[sheet.background].name}</div>
             <div className="row">
               {sheet.dead && <Pill kind="bad">Dead</Pill>}

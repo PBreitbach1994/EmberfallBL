@@ -54,6 +54,11 @@ Environment: `PORT` (3000), `DATA_DIR` (`./data`), `INVITE_CODE` (`emberfall` �
   companion over; let the AI play one turn ("Auto"); be the DM yourself with DM tools (narrate, call checks, award loot,
   jump scenes, spawn monsters) while AI players react to your narration; or launch an autonomous AI party and read
   the tale in the chronicle afterwards.
+- **Embers & the Curio Shop** — a player-level reward currency (separate from in-game gold) earned by finishing
+  scenarios (more on Hard/Brutal), felling foes, levelling up, completing personal quests, retiring heroes and a daily
+  first-adventure bonus. Spend it on dice skins (everyone at the table sees your dice), page/dice-tray backdrops, and
+  story perks: Pathfinder's Map (skip a road event), Inspiration Draught, a hero's Epithet, and a Bard's Ballad written
+  into the chronicle. Owners can gift Embers from Admin. Tune prices/earnings in `packages/engine/src/rewards.ts`.
 - **Difficulty** — Story / Normal / Hard / Brutal (campaign owner picks it on the tavern screen). Fights also scale
   automatically to party size and to how far the party's level is above or below the scenario's.
 - **Hardcore** — campaign-wide or per character: no resurrection. Otherwise *Revivify* (in combat, within a minute,

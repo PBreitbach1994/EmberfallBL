@@ -1,7 +1,8 @@
 // The dice arena: real polyhedral dice tumble onto a felt tray and land on the numbers the engine
 // rolled. Attack/check d20s are followed by the damage dice that came with them.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LogEntry } from "@tavern/engine";
+import type { DiceFacePalette, LogEntry } from "@tavern/engine";
+import { DEFAULT_DICE, MONSTER_DICE, REWARD_BY_ID } from "@tavern/engine";
 import { playDice } from "../sound";
 import { DiceTray } from "./DiceTray";
 
@@ -38,7 +39,7 @@ export function DiceModeToggle() {
 // ---------------------------------------------------------------------------------------------
 // Turning log entries into throws
 
-interface ThrowDie { id: number; sides: number; value: number; kind: "d20" | "damage" | "heal"; dropped?: boolean; crit?: boolean; fumble?: boolean; x: number; y: number; rot: number; delay: number }
+interface ThrowDie { id: number; sides: number; value: number; kind: "d20" | "damage" | "heal"; actor?: string; dropped?: boolean; crit?: boolean; fumble?: boolean; x: number; y: number; rot: number; delay: number }
 interface Throw { id: number; title: string; detail?: string; outcome?: "hit" | "miss" | "crit" | "success" | "failure" | "fumble"; dice: ThrowDie[]; long: boolean }
 
 let seq = 1;
@@ -51,7 +52,7 @@ function d20Dice(e: LogEntry, delay: number): ThrowDie[] {
   return rolls.map((v) => {
     const kept = !keptUsed && v === d.natural;
     if (kept) keptUsed = true;
-    return { id: seq++, sides: 20, value: v, kind: "d20" as const, dropped: rolls.length > 1 && !kept, crit: kept && v === 20, fumble: kept && v === 1, x: 0, y: 0, rot: 0, delay };
+    return { id: seq++, sides: 20, value: v, kind: "d20" as const, actor: e.actorId, dropped: rolls.length > 1 && !kept, crit: kept && v === 20, fumble: kept && v === 1, x: 0, y: 0, rot: 0, delay };
   });
 }
 
@@ -99,7 +100,7 @@ function buildThrows(entries: LogEntry[]): Throw[] {
     }
     if (e.kind === "combat" && data?.dice?.length) {
       const heal = /regains/.test(e.text);
-      const dice: ThrowDie[] = data.dice.slice(0, 14).map((d, i) => ({ id: seq++, sides: d.sides, value: d.value, kind: heal ? "heal" : "damage", x: 0, y: 0, rot: 0, delay: 0.9 + i * 0.05 }));
+      const dice: ThrowDie[] = data.dice.slice(0, 14).map((d, i) => ({ id: seq++, sides: d.sides, value: d.value, kind: heal ? "heal" : "damage", actor: e.actorId, x: 0, y: 0, rot: 0, delay: 0.9 + i * 0.05 }));
       const amount = /(takes|regains) (\d+)/.exec(e.text)?.[2];
       const last = throws[throws.length - 1];
       if (last && last.dice.every((d) => d.kind === "d20") && last !== init && (last.outcome === "hit" || last.outcome === "crit")) {
@@ -131,7 +132,27 @@ function DieShape({ sides }: { sides: number }) {
   }
 }
 
-function Die({ d, speed }: { d: ThrowDie; speed: number }) {
+/** A single die drawn in a palette (used by the arena and the Curio Shop previews). */
+export function DieFace({ sides, value, palette, glow, size = 52 }: { sides: number; value: number; palette: DiceFacePalette; glow?: string; size?: number }) {
+  return (
+    <svg viewBox="-26 -26 52 52" width={size} height={size} aria-label={`d${sides}: ${value}`} className="die-face"
+      style={{ ["--df" as string]: palette.fill, ["--ds" as string]: palette.stroke, ["--di" as string]: palette.inner, ["--dn" as string]: palette.num, filter: glow ? `drop-shadow(0 0 6px ${glow})` : undefined }}>
+      <g className="die-body"><DieShape sides={sides} /></g>
+      <text className="die-num" textAnchor="middle" dy="0.36em" y={sides === 4 ? 5 : 0}>{value}</text>
+    </svg>
+  );
+}
+
+function paletteFor(d: ThrowDie, skins?: Record<string, string>): { pal: DiceFacePalette; glow?: string; sparkle?: boolean } {
+  const id = d.actor ? skins?.[d.actor] : undefined;
+  // players' heroes roll their owner's dice; monsters roll grim iron
+  const skin = id ? REWARD_BY_ID[id]?.dice : d.actor?.startsWith("m") ? MONSTER_DICE : REWARD_BY_ID[DEFAULT_DICE].dice;
+  const s = skin ?? REWARD_BY_ID[DEFAULT_DICE].dice!;
+  return { pal: d.kind === "d20" ? s.d20 : d.kind === "heal" ? s.heal : s.damage, glow: s.glow, sparkle: s.sparkle };
+}
+
+function Die({ d, speed, skins }: { d: ThrowDie; speed: number; skins?: Record<string, string> }) {
+  const look = paletteFor(d, skins);
   const [shown, setShown] = useState<number>(() => 1 + Math.floor(Math.random() * d.sides));
   const [landed, setLanded] = useState(false);
   useEffect(() => {
@@ -142,9 +163,9 @@ function Die({ d, speed }: { d: ThrowDie; speed: number }) {
     }, Math.max(0, d.delay) * 1000 * speed);
     return () => { alive = false; clearTimeout(start); };
   }, [d, speed]);
-  const cls = ["adie", `d${d.sides}`, d.kind, landed ? "landed" : "rolling", d.dropped && landed ? "dropped" : "", d.crit && landed ? "crit" : "", d.fumble && landed ? "fumble" : ""].join(" ");
+  const cls = ["adie", `d${d.sides}`, d.kind, look.sparkle ? "sparkle" : "", landed ? "landed" : "rolling", d.dropped && landed ? "dropped" : "", d.crit && landed ? "crit" : "", d.fumble && landed ? "fumble" : ""].join(" ");
   return (
-    <div className={cls} style={{ left: `${d.x}%`, top: `${d.y}%`, ["--rot" as string]: `${d.rot}deg`, ["--delay" as string]: `${Math.max(0, d.delay) * speed}s`, ["--dur" as string]: `${0.75 * speed}s`, ["--from-x" as string]: `${rand(-260, -120)}px`, ["--from-y" as string]: `${rand(-90, 40)}px` }}>
+    <div className={cls} style={{ left: `${d.x}%`, top: `${d.y}%`, ["--rot" as string]: `${d.rot}deg`, ["--delay" as string]: `${Math.max(0, d.delay) * speed}s`, ["--dur" as string]: `${0.75 * speed}s`, ["--from-x" as string]: `${rand(-260, -120)}px`, ["--from-y" as string]: `${rand(-90, 40)}px`, ["--df" as string]: look.pal.fill, ["--ds" as string]: look.pal.stroke, ["--di" as string]: look.pal.inner, ["--dn" as string]: look.pal.num, ["--glow" as string]: look.glow ?? "transparent" }}>
       <svg viewBox="-26 -26 52 52" width="52" height="52" aria-hidden="true">
         <g className="die-body"><DieShape sides={d.sides} /></g>
         <text className="die-num" textAnchor="middle" dy="0.36em" y={d.sides === 4 ? 5 : 0}>{shown}</text>
@@ -154,7 +175,7 @@ function Die({ d, speed }: { d: ThrowDie; speed: number }) {
   );
 }
 
-function Arena({ t, speed, onDone }: { t: Throw; speed: number; onDone: () => void }) {
+function Arena({ t, speed, onDone, skins }: { t: Throw; speed: number; onDone: () => void; skins?: Record<string, string> }) {
   useEffect(() => {
     playDice();
     const ms = (t.long ? 2600 : 1900) * speed + 400;
@@ -166,7 +187,7 @@ function Arena({ t, speed, onDone }: { t: Throw; speed: number; onDone: () => vo
   return (
     <div className="dice-arena" role="status" aria-live="polite">
       <div className="dice-felt">
-        {t.dice.map((d) => <Die key={d.id} d={d} speed={speed} />)}
+        {t.dice.map((d) => <Die key={d.id} d={d} speed={speed} skins={skins} />)}
       </div>
       <div className={`dice-caption ${t.outcome ?? ""}`} onClick={onDone} title="Click (or press Esc) to skip" style={{ ["--delay" as string]: `${(t.long ? 1.6 : 0.75) * speed}s` }}>
         <strong>{t.title}</strong>
@@ -178,7 +199,7 @@ function Arena({ t, speed, onDone }: { t: Throw; speed: number; onDone: () => vo
   );
 }
 
-export function Dice({ log: storyLog, combatLog }: { log: LogEntry[]; combatLog?: LogEntry[] }) {
+export function Dice({ log: storyLog, combatLog, skins }: { log: LogEntry[]; combatLog?: LogEntry[]; skins?: Record<string, string> }) {
   // checks live in the story log, attacks/damage/initiative in the fight's own log: watch both
   const log = useMemo(() => (combatLog?.length ? [...storyLog, ...combatLog].sort((a, b) => a.t - b.t) : storyLog), [storyLog, combatLog]);
   const [mode] = useDiceMode();
@@ -198,5 +219,5 @@ export function Dice({ log: storyLog, combatLog }: { log: LogEntry[]; combatLog?
   if (!cur) return null;
   // speed up when a burst of AI turns has queued many throws
   const speed = queue.length > 4 ? 0.45 : queue.length > 2 ? 0.7 : 1;
-  return <Arena key={cur.id} t={cur} speed={speed} onDone={done} />;
+  return <Arena key={cur.id} t={cur} speed={speed} onDone={done} skins={skins} />;
 }

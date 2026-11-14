@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import type { CampaignView, CharacterSheet, UserInfo } from "@tavern/engine";
+import type { CampaignView, CharacterSheet, RewardsView, UserInfo } from "@tavern/engine";
+import { DEFAULT_BACKDROP, REWARD_BY_ID } from "@tavern/engine";
+import { Shop } from "./screens/Shop";
 import { api, attempt, getStoredUser, getToken, onUnauthorized, storeAuth, useServerMessages, useToasts } from "./api";
 import { Login } from "./screens/Login";
 import { Tavern } from "./screens/Tavern";
@@ -18,7 +20,8 @@ export type Screen =
   | { name: "create" }
   | { name: "sheet"; id: string }
   | { name: "adventure"; id: string }
-  | { name: "admin" };
+  | { name: "admin" }
+  | { name: "shop" };
 
 export interface AppCtx {
   user: UserInfo;
@@ -27,6 +30,9 @@ export interface AppCtx {
   companions: CharacterSheet[];
   /** other players' characters (campaign owner only, read-only) */
   others: CharacterSheet[];
+  rewards: RewardsView | null;
+  setRewards: (r: RewardsView) => void;
+  refreshRewards: () => Promise<void>;
   refreshCampaign: () => Promise<void>;
   refreshCharacters: () => Promise<void>;
   go: (s: Screen) => void;
@@ -47,7 +53,7 @@ function screenFromHash(): Screen {
     const [n, id] = h.split("/");
     if (n === "adventure" && id) return { name: "adventure", id };
     if (n === "sheet" && id) return { name: "sheet", id };
-    if (n === "characters" || n === "create" || n === "admin") return { name: n };
+    if (n === "characters" || n === "create" || n === "admin" || n === "shop") return { name: n };
   } catch { /* ignore */ }
   return { name: "tavern" };
 }
@@ -70,6 +76,19 @@ export function App() {
   const [characters, setCharacters] = useState<CharacterSheet[]>([]);
   const [companions, setCompanions] = useState<CharacterSheet[]>([]);
   const [others, setOthers] = useState<CharacterSheet[]>([]);
+  const [rewards, setRewards] = useState<RewardsView | null>(null);
+  const refreshRewards = useCallback(async () => {
+    const r = await attempt(() => api<RewardsView>("/rewards"));
+    if (r) setRewards(r);
+  }, []);
+  // the equipped backdrop re-skins the whole page and the dice tray
+  useEffect(() => {
+    const b = REWARD_BY_ID[rewards?.equipped.backdrop ?? DEFAULT_BACKDROP]?.backdrop;
+    const custom = rewards && rewards.equipped.backdrop !== DEFAULT_BACKDROP && b;
+    document.body.style.background = custom ? `repeating-linear-gradient(92deg, rgba(0,0,0,0.05) 0 3px, transparent 3px 11px), ${b.page}` : "";
+    document.body.style.backgroundAttachment = custom ? "fixed" : "";
+    document.documentElement.style.setProperty("--felt", b?.felt ?? "#1f5a3a");
+  }, [rewards]);
   const login = useCallback((u: UserInfo, t: string) => { storeAuth(u, t); setUser(u); }, []);
   const logout = useCallback(() => {
     storeAuth(null, null);
@@ -103,10 +122,11 @@ export function App() {
     });
     refreshCampaign();
     refreshCharacters();
-  }, [user, refreshCampaign, refreshCharacters]);
+    refreshRewards();
+  }, [user, refreshCampaign, refreshCharacters, refreshRewards]);
 
   useServerMessages((m) => {
-    if (m.type === "campaign") { refreshCampaign(); refreshCharacters(); }
+    if (m.type === "campaign") { refreshCampaign(); refreshCharacters(); refreshRewards(); }
   });
 
   if (!user) {
@@ -118,7 +138,7 @@ export function App() {
     );
   }
 
-  const ctx: AppCtx = { user, campaign, characters, companions, others, refreshCampaign, refreshCharacters, go };
+  const ctx: AppCtx = { user, campaign, characters, companions, others, rewards, setRewards, refreshRewards, refreshCampaign, refreshCharacters, go };
   const nav = (s: Screen, label: string) => (
     <button className={`navbtn ${screen.name === s.name ? "active" : ""}`} onClick={() => go(s)}>{label}</button>
   );
@@ -136,9 +156,11 @@ export function App() {
         <nav>
           {nav({ name: "tavern" }, "Tavern")}
           {nav({ name: "characters" }, "Characters")}
+          {nav({ name: "shop" }, "Curio Shop")}
           {user.isAdmin && nav({ name: "admin" }, "Admin")}
         </nav>
         <div className="userbox">
+          {rewards && <button className="linkbtn embers-btn" onClick={() => go({ name: "shop" })} title="Embers — spend them in the Curio Shop">🔥 {rewards.embers}</button>}
           <DiceModeToggle />
           <SoundToggle />
           <span>{user.name}</span>
@@ -152,6 +174,7 @@ export function App() {
         {screen.name === "sheet" && <CharacterSheetView ctx={ctx} id={screen.id} />}
         {screen.name === "adventure" && <Adventure ctx={ctx} id={screen.id} />}
         {screen.name === "admin" && <Admin ctx={ctx} />}
+        {screen.name === "shop" && <Shop ctx={ctx} />}
       </main>
       <ToastHost />
     </div>
