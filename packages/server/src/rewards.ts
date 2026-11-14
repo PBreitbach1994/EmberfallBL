@@ -2,7 +2,7 @@
 import {
   phoenixAllowed, reviveSheet, graveMarks, type DeathRuleContext,
   CLASSES, DEFAULT_BACKDROP, DEFAULT_DICE, EMBER_RULES, REWARD_BY_ID, SPECIES, logEntry,
-  type AdventureState, type CharacterSheet, type RewardsView,
+  type AdventureState, type CampaignState, type CharacterSheet, type RewardsView,
 } from "@tavern/engine";
 import { HttpError } from "./game.js";
 import type { Store, UserRecord } from "./store.js";
@@ -111,7 +111,7 @@ export class Rewards {
   }
 
   /** Story perks applied to one of the player's heroes. */
-  async use(u: UserRecord, itemId: string, characterId: string, text: string | undefined, campaign: { week: number; chronicle: { week: number; text: string }[] }, rules: DeathRuleContext = { hardcore: false }): Promise<string> {
+  async use(u: UserRecord, itemId: string, characterId: string, text: string | undefined, campaign: CampaignState, rules: DeathRuleContext = { hardcore: false }): Promise<string> {
     const item = REWARD_BY_ID[itemId];
     if (!item || item.kind !== "story" || itemId === "story:map") throw bad("That can't be used on a hero.");
     const s = this.store.characters.get(characterId);
@@ -161,7 +161,7 @@ export class Rewards {
       }
       case "story:ballad": {
         pay();
-        const ballad = await this.ballad(s);
+        const ballad = await this.ballad(s, campaign);
         s.backstory = `${s.backstory ? s.backstory + "\n\n" : ""}— Ballad (week ${campaign.week}) —\n${ballad}`.slice(0, 6000);
         this.store.saveCharacter(s);
         campaign.chronicle.push({ week: campaign.week, text: `A bard sings of ${s.name}${s.epithet ? ` ${s.epithet}` : ""}:\n${ballad}` });
@@ -171,14 +171,14 @@ export class Rewards {
     throw bad("Unknown perk.");
   }
 
-  private async ballad(s: CharacterSheet): Promise<string> {
+  private async ballad(s: CharacterSheet, campaign: CampaignState): Promise<string> {
     const facts = {
       name: `${s.name}${s.epithet ? ` ${s.epithet}` : ""}`, species: SPECIES[s.species].name, cls: CLASSES[s.classId].name, level: s.level,
       kills: Object.values(s.stats.kills).reduce((a, b) => a + b, 0), scenarios: s.stats.scenariosCompleted.length, knockouts: s.stats.knockouts,
       crits: s.stats.criticals, deaths: s.deathCount, personality: s.personality, backstory: s.backstory?.slice(0, 600),
     };
-    if (aiAvailable()) {
-      try { const b = await writeBallad(facts); if (b) return b; } catch { /* fall back */ }
+    if (aiAvailable(campaign)) {
+      try { const b = await writeBallad(campaign, facts); if (b) return b; } catch { /* fall back */ }
     }
     return [
       `Raise a cup to ${facts.name}, the ${facts.species.toLowerCase()} ${facts.cls.toLowerCase()},`,

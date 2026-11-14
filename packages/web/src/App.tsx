@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import type { CampaignView, CharacterSheet, RewardsView, UserInfo } from "@tavern/engine";
+import type { CampaignSummary, CampaignView, CharacterSheet, RewardsView, UserInfo } from "@tavern/engine";
+import { CampaignPage, CampaignSwitcher, Welcome } from "./screens/Campaigns";
 import { DEFAULT_BACKDROP, REWARD_BY_ID } from "@tavern/engine";
 import { Shop } from "./screens/Shop";
-import { api, attempt, getStoredUser, getToken, onUnauthorized, storeAuth, useServerMessages, useToasts } from "./api";
+import { ApiError, api, attempt, getCampaignId, getStoredUser, getToken, onUnauthorized, setCampaignId, storeAuth, useServerMessages, useToasts } from "./api";
 import { Login } from "./screens/Login";
 import { Tavern } from "./screens/Tavern";
 import { Characters } from "./screens/Characters";
@@ -21,7 +22,9 @@ export type Screen =
   | { name: "sheet"; id: string }
   | { name: "adventure"; id: string }
   | { name: "admin" }
-  | { name: "shop" };
+  | { name: "shop" }
+  | { name: "welcome" }
+  | { name: "campaign" };
 
 export interface AppCtx {
   user: UserInfo;
@@ -31,6 +34,11 @@ export interface AppCtx {
   /** other players' characters (campaign owner only, read-only) */
   others: CharacterSheet[];
   rewards: RewardsView | null;
+  campaigns: CampaignSummary[] | null;
+  campaignId: string | null;
+  canCreate: boolean;
+  switchCampaign: (id: string) => void;
+  refreshCampaigns: () => Promise<void>;
   setRewards: (r: RewardsView) => void;
   refreshRewards: () => Promise<void>;
   refreshCampaign: () => Promise<void>;
@@ -53,7 +61,7 @@ function screenFromHash(): Screen {
     const [n, id] = h.split("/");
     if (n === "adventure" && id) return { name: "adventure", id };
     if (n === "sheet" && id) return { name: "sheet", id };
-    if (n === "characters" || n === "create" || n === "admin" || n === "shop") return { name: n };
+    if (n === "characters" || n === "create" || n === "admin" || n === "shop" || n === "welcome" || n === "campaign") return { name: n };
   } catch { /* ignore */ }
   return { name: "tavern" };
 }
@@ -105,10 +113,31 @@ export function App() {
     window.scrollTo(0, 0);
   }, []);
 
+  const [campaigns, setCampaigns] = useState<CampaignSummary[] | null>(null);
+  const [campaignId, setCid] = useState<string | null>(getCampaignId());
+  const [canCreate, setCanCreate] = useState(false);
   const refreshCampaign = useCallback(async () => {
-    const r = await attempt(() => api<CampaignView>("/campaign"));
-    if (r) setCampaign(r);
+    try { setCampaign(await api<CampaignView>("/campaign")); }
+    catch (e) { if (e instanceof ApiError && e.status === 409) setCampaign(null); else attempt(() => Promise.reject(e)); }
   }, []);
+  const refreshCampaigns = useCallback(async () => {
+    const r = await attempt(() => api<{ campaigns: CampaignSummary[]; canCreate: boolean }>("/campaigns"));
+    if (!r) return;
+    setCampaigns(r.campaigns);
+    setCanCreate(r.canCreate);
+    const cur = getCampaignId();
+    const mine = r.campaigns.filter((c) => c.role !== "site-admin");
+    if (!cur || !r.campaigns.some((c) => c.id === cur)) {
+      const pick = (mine[0] ?? r.campaigns[0])?.id ?? null;
+      setCampaignId(pick); setCid(pick);
+    }
+  }, []);
+  const switchCampaign = useCallback((id: string) => {
+    setCampaignId(id); setCid(id);
+    setScreen({ name: "tavern" });
+    try { location.hash = "tavern"; } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { if (user) refreshCampaign(); }, [campaignId, user, refreshCampaign]);
   const refreshCharacters = useCallback(async () => {
     const r = await attempt(() => api<{ characters: CharacterSheet[]; companions: CharacterSheet[]; others?: CharacterSheet[] }>("/characters"));
     if (r) { setCharacters(r.characters); setCompanions(r.companions); setOthers(r.others ?? []); }
@@ -120,13 +149,13 @@ export function App() {
     attempt(() => api<{ user: UserInfo }>("/me")).then((r) => {
       if (r && JSON.stringify(r.user) !== JSON.stringify(user)) { storeAuth(r.user, getToken()); setUser(r.user); }
     });
-    refreshCampaign();
+    refreshCampaigns();
     refreshCharacters();
     refreshRewards();
-  }, [user, refreshCampaign, refreshCharacters, refreshRewards]);
+  }, [user, refreshCampaigns, refreshCharacters, refreshRewards]);
 
   useServerMessages((m) => {
-    if (m.type === "campaign") { refreshCampaign(); refreshCharacters(); refreshRewards(); }
+    if (m.type === "campaign") { refreshCampaigns(); refreshCampaign(); refreshCharacters(); refreshRewards(); }
   });
 
   if (!user) {
@@ -138,7 +167,7 @@ export function App() {
     );
   }
 
-  const ctx: AppCtx = { user, campaign, characters, companions, others, rewards, setRewards, refreshRewards, refreshCampaign, refreshCharacters, go };
+  const ctx: AppCtx = { user, campaign, characters, companions, others, rewards, setRewards, refreshRewards, campaigns, campaignId, canCreate, switchCampaign, refreshCampaigns, refreshCampaign, refreshCharacters, go };
   const nav = (s: Screen, label: string) => (
     <button className={`navbtn ${screen.name === s.name ? "active" : ""}`} onClick={() => go(s)}>{label}</button>
   );
@@ -157,9 +186,11 @@ export function App() {
           {nav({ name: "tavern" }, "Tavern")}
           {nav({ name: "characters" }, "Characters")}
           {nav({ name: "shop" }, "Curio Shop")}
+          {(campaign?.role === "owner" || campaign?.role === "site-admin") && nav({ name: "campaign" }, "Campaign")}
           {user.isAdmin && nav({ name: "admin" }, "Admin")}
         </nav>
         <div className="userbox">
+          <CampaignSwitcher ctx={ctx} />
           {rewards && <button className="linkbtn embers-btn" onClick={() => go({ name: "shop" })} title="Embers — spend them in the Curio Shop">🔥 {rewards.embers}</button>}
           <DiceModeToggle />
           <SoundToggle />
@@ -168,7 +199,10 @@ export function App() {
         </div>
       </header>
       <main className="content">
-        {screen.name === "tavern" && <Tavern ctx={ctx} />}
+        {campaigns !== null && campaigns.length === 0 && !["characters", "create", "sheet", "shop"].includes(screen.name) && <Welcome ctx={ctx} />}
+        {screen.name === "welcome" && campaigns !== null && campaigns.length > 0 && <Welcome ctx={ctx} />}
+        {screen.name === "campaign" && <CampaignPage ctx={ctx} />}
+        {screen.name === "tavern" && campaigns !== null && campaigns.length > 0 && <Tavern ctx={ctx} />}
         {screen.name === "characters" && <Characters ctx={ctx} />}
         {screen.name === "create" && <CharacterCreate ctx={ctx} />}
         {screen.name === "sheet" && <CharacterSheetView ctx={ctx} id={screen.id} />}

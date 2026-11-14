@@ -10,10 +10,12 @@ import {
 import { BUILDINGS, EVENTS, PERSONAL_QUESTS, SCENARIOS } from "@tavern/engine/content";
 import { aiAvailable, chronicle, companionDecide, companionsReact, handlePlayerAction, logNarration, narrateScene } from "./dm.js";
 import { newId, type Store, type UserRecord } from "./store.js";
+import { addMember, currentCampaignId, newJoinCode } from "./campaigns.js";
 import { Rewards } from "./rewards.js";
 import { DEFAULT_DICE, EMBER_RULES } from "@tavern/engine";
 
-export const CAMPAIGN_ID = "emberfall";
+/** id of the original single campaign (kept so existing saves carry on) */
+export const LEGACY_CAMPAIGN_ID = "emberfall";
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -47,22 +49,19 @@ export class Game {
   // ------------------------------------------------------------------------------------------
   // Campaign
 
-  campaign(): CampaignState {
-    return this.store.campaigns.get(CAMPAIGN_ID)!;
+  /** The campaign of the current request (or an explicit id). */
+  campaign(id?: string): CampaignState {
+    const cid = id ?? currentCampaignId();
+    const c = cid ? this.store.campaigns.get(cid) : undefined;
+    if (!c) throw new HttpError(409, "Choose a campaign first — or ask a campaign owner for an invite.");
+    return c;
   }
 
-  private ensureCampaign() {
-    if (this.store.campaigns.has(CAMPAIGN_ID)) {
-      // make sure newly added content/buildings appear in old saves
-      const c = this.store.campaigns.get(CAMPAIGN_ID)!;
-      for (const b of Object.values(BUILDINGS)) if (c.buildings[b.id] === undefined) c.buildings[b.id] = b.startingLevel;
-      c.settings.difficulty ??= "normal";
-      this.store.saveCampaign(c);
-      return;
-    }
+  /** Create a new campaign with a fresh Emberfall, owned by `owner`. */
+  createCampaign(name: string, owner: UserRecord | undefined, id = newId("cmp")): CampaignState {
     const rng = new Rng();
     const c: CampaignState = {
-      id: CAMPAIGN_ID, name: "The Hollow Crown", createdAt: Date.now(), week: 1, season: "summer", prosperity: 1, reputation: 0, treasury: 50,
+      id, name: name.trim().slice(0, 48) || "A New Company", createdAt: Date.now(), week: 1, season: "summer", prosperity: 1, reputation: 0, treasury: 50,
       materials: { timber: 2, iron: 0, herbs: 1, relic: 0 },
       buildings: Object.fromEntries(Object.values(BUILDINGS).map((b) => [b.id, b.startingLevel])),
       unlockedScenarios: ["cellar"], completedScenarios: [], failedScenarios: [], flags: [],
@@ -71,8 +70,39 @@ export class Game {
       townDeck: rng.shuffle(Object.values(EVENTS).filter((e) => e.deck === "town").map((e) => e.id)),
       retired: [], chronicle: [{ week: 1, text: "The Broken Lantern opens its doors to a new company of adventurers." }],
       settings: { difficulty: "normal", hardcore: false, flanking: false, aiDm: true, aiCompanionBanter: true, autoReactions: true, maxPartySize: 6, allowAutonomousParties: true },
+      ownerUserId: owner?.id, members: [], joinCode: newJoinCode(), ai: {},
     };
+    if (owner) addMember(c, owner.id, "owner");
     this.store.saveCampaign(c);
+    return c;
+  }
+
+  private ensureCampaign() {
+    // upgrade old saves: new buildings/settings appear in every campaign
+    for (const c of this.store.campaigns.values()) {
+      for (const b of Object.values(BUILDINGS)) if (c.buildings[b.id] === undefined) c.buildings[b.id] = b.startingLevel;
+      c.settings.difficulty ??= "normal";
+      c.joinCode ??= newJoinCode();
+      this.store.saveCampaign(c);
+    }
+    if (!this.store.campaigns.size) this.createCampaign("The Hollow Crown", undefined, LEGACY_CAMPAIGN_ID);
+    this.adoptLegacy();
+  }
+
+  /**
+   * The original single-campaign install becomes the first campaign: the site owner owns it, everyone
+   * who was already playing becomes a member, and it keeps using the server's AI key.
+   */
+  adoptLegacy() {
+    const c = this.store.campaigns.get(LEGACY_CAMPAIGN_ID);
+    if (!c) return;
+    let changed = false;
+    if (!c.members) { c.members = []; for (const u of this.store.users.values()) addMember(c, u.id, "player"); c.ai = { useSiteKey: true }; changed = true; }
+    if (!c.ownerUserId) {
+      const admin = [...this.store.users.values()].filter((u) => u.isAdmin).sort((a, b) => a.createdAt - b.createdAt)[0];
+      if (admin) { c.ownerUserId = admin.id; addMember(c, admin.id, "owner"); c.ai = { ...(c.ai ?? {}), useSiteKey: true }; changed = true; }
+    }
+    if (changed) this.store.saveCampaign(c);
   }
 
   private ensureCompanions() {
@@ -130,7 +160,7 @@ export class Game {
   ctx(adv: AdventureState): AdventureContext {
     const scenario = SCENARIOS[adv.scenarioId];
     if (!scenario) throw new HttpError(500, `Missing scenario ${adv.scenarioId}`);
-    return { campaign: this.campaign(), scenario, characters: this.store.characters };
+    return { campaign: this.campaign(adv.campaignId), scenario, characters: this.store.characters };
   }
 
   getAdventure(id: string): AdventureState {
@@ -143,7 +173,7 @@ export class Game {
     adv.updatedAt = Date.now();
     this.store.saveAdventure(adv);
     for (const p of adv.party) { const s = this.store.characters.get(p.characterId); if (s) this.store.saveCharacter(s); }
-    this.store.saveCampaign(this.campaign());
+    this.store.saveCampaign(this.campaign(adv.campaignId));
   }
 
   private push(adv: AdventureState) {
@@ -196,8 +226,10 @@ export class Game {
     };
   }
 
-  summaries(): AdventureSummary[] {
+  summaries(campaignId?: string): AdventureSummary[] {
+    const cid = campaignId ?? currentCampaignId();
     return [...this.store.adventures.values()]
+      .filter((a) => a.campaignId === cid)
       .filter((a) => a.status === "exploring" || a.status === "combat" || Date.now() - a.updatedAt < 1000 * 60 * 60 * 24)
       .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 30)
       .map((a) => ({
@@ -232,18 +264,18 @@ export class Game {
       party.push({ characterId: id, controller: asHuman ? { kind: "human", userId: user.id } : { kind: "ai-player", persona: s.aiPersona }, userId: asHuman ? user.id : "ai" });
     }
     const wantsAi = req.dmMode === "ai";
-    if (wantsAi && !aiAvailable()) throw bad("The AI DM needs an ANTHROPIC_API_KEY on the server. Choose the Scripted DM instead.");
+    if (wantsAi && !aiAvailable(campaign)) throw bad("This campaign has no AI Dungeon Master configured (or it has used its monthly allowance). The owner can add an Anthropic key on the Campaign page — or choose the Scripted DM.");
     if (req.autonomous && !campaign.settings.allowAutonomousParties) throw bad("Autonomous parties are disabled.");
     if (req.autonomous && party.some((p) => p.controller.kind === "human")) throw bad("Autonomous parties are AI-only.");
     const adv = startAdventure(newId("adv"), { campaign, scenario, characters: this.store.characters }, party, {
-      dmMode: req.autonomous ? (aiAvailable() ? "ai" : "scripted") : req.dmMode, hostUserId: user.id, dmUserId: req.dmMode === "human" ? user.id : undefined, autonomous: req.autonomous,
+      dmMode: req.autonomous ? (aiAvailable(campaign) ? "ai" : "scripted") : req.dmMode, hostUserId: user.id, dmUserId: req.dmMode === "human" ? user.id : undefined, autonomous: req.autonomous,
     });
     adv.openSeats = Math.max(0, Math.min(4, req.openSeats ?? 0));
     for (const p of party) { const s = this.store.characters.get(p.characterId)!; s.activeAdventureId = adv.id; }
     // Frosthaven-style road event on the way (the tutorial starts in the tavern itself)
     if (scenario.id !== "cellar") {
       if (req.useMap && this.rewards.spendMap(user)) adv.log.push(logEntry("system", `🗺 ${user.name}'s Pathfinder's Map leads the party around trouble on the road.`));
-      else adv.pendingEvent = this.drawRoadEvent();
+      else adv.pendingEvent = this.drawRoadEvent(campaign);
     }
     if (adv.pendingEvent) {
       const card = EVENTS[adv.pendingEvent];
@@ -263,8 +295,7 @@ export class Game {
     return !!a && (a.status === "exploring" || a.status === "combat");
   }
 
-  private drawRoadEvent(): string | undefined {
-    const c = this.campaign();
+  private drawRoadEvent(c: CampaignState): string | undefined {
     if (!c.roadDeck.length) c.roadDeck = new Rng().shuffle(Object.values(EVENTS).filter((e) => e.deck === "road").map((e) => e.id));
     for (let i = 0; i < c.roadDeck.length; i++) {
       const card = EVENTS[c.roadDeck[i]];
@@ -282,7 +313,7 @@ export class Game {
       if (!s || s.ownerId !== user.id) throw bad("Choose one of your characters.");
       if (s.dead || s.retired) throw bad(`${s.name} can't adventure.`);
       if (s.activeAdventureId && this.isActive(s.activeAdventureId)) throw bad(`${s.name} is already on an adventure.`);
-      if (adv.party.length >= this.campaign().settings.maxPartySize) throw bad("The party is full.");
+      if (adv.party.length >= this.campaign(adv.campaignId).settings.maxPartySize) throw bad("The party is full.");
       adv.party.push({ characterId, controller: { kind: "human", userId: user.id }, userId: user.id });
       adv.openSeats--;
       s.activeAdventureId = adv.id;
@@ -419,7 +450,7 @@ export class Game {
           if (!isDm) throw bad("Only the DM can do that.");
           logNarration(adv, action.text.slice(0, 4000));
           const companions = adv.party.filter((p) => p.controller.kind === "ai-player").map((p) => this.store.characters.get(p.characterId)!).filter(Boolean);
-          if (companions.length && aiAvailable()) {
+          if (companions.length && aiAvailable(ctx.campaign)) {
             this.thinking.add(adv.id); this.push(adv);
             try {
               for (const r of await companionsReact(adv, ctx, companions, action.text)) {
@@ -523,7 +554,7 @@ export class Game {
   }
 
   private async finalize(adv: AdventureState) {
-    const c = this.campaign();
+    const c = this.campaign(adv.campaignId);
     for (const p of adv.party) {
       const s = this.store.characters.get(p.characterId);
       if (!s) continue;
@@ -538,7 +569,7 @@ export class Game {
       this.store.saveCharacter(s);
     }
     if (!adv.autonomous && !adv.embersAwarded) this.rewards.awardAdventure(adv, c.settings.difficulty ?? "normal");
-    if (adv.autonomous && aiAvailable()) {
+    if (adv.autonomous && aiAvailable(c)) {
       try {
         const tale = await chronicle(adv, this.ctx(adv));
         if (tale) { c.chronicle.push({ week: c.week, text: tale }); adv.log.push(logEntry("narration", `📖 ${tale}`)); }
@@ -616,7 +647,7 @@ export class Game {
             const companions = adv.party.map((p) => this.store.characters.get(p.characterId)!).filter((s) => s && !s.dead);
             const speaker = companions[step % Math.max(1, companions.length)];
             let optionId: string | undefined;
-            if (aiAvailable() && speaker) {
+            if (aiAvailable(ctx.campaign) && speaker) {
               try {
                 const d = await companionDecide(adv, ctx, speaker);
                 if (d.say) adv.log.push(logEntry("dialogue", `${speaker.name}: ${d.say}`, speaker.id));
@@ -634,7 +665,7 @@ export class Game {
           }
           this.push(adv);
         });
-        await sleep(aiAvailable() ? 1200 : 600);
+        await sleep(aiAvailable(this.store.campaigns.get(this.store.adventures.get(advId)?.campaignId ?? "")) ? 1200 : 600);
       }
     } finally {
       this.aiRunners.delete(key);

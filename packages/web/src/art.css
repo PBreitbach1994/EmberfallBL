@@ -307,3 +307,8 @@ button:not(.linkbtn):active:not(:disabled) { transform: translateY(1px); }
 
 .grave-mark { margin: 2px 0 0; color: #c9b0ff; font-size: 0.9em; }
 li.fallen { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; }
+
+/* campaigns */
+.campaign-switcher { max-width: 210px; background: rgba(0,0,0,0.35); color: inherit; border: 1px solid rgba(217,180,90,0.4); border-radius: 8px; padding: 4px 6px; }
+.join-code { font-size: 1.15em; padding: 4px 10px; border-radius: 8px; background: rgba(0,0,0,0.35); border: 1px dashed #d9b45a88; letter-spacing: 0.04em; }
+@media (max-width: 640px) { .campaign-switcher { max-width: 140px; } }

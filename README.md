@@ -54,6 +54,11 @@ Environment: `PORT` (3000), `DATA_DIR` (`./data`), `INVITE_CODE` (`emberfall` �
   companion over; let the AI play one turn ("Auto"); be the DM yourself with DM tools (narrate, call checks, award loot,
   jump scenes, spawn monsters) while AI players react to your narration; or launch an autonomous AI party and read
   the tale in the chronicle afterwards.
+- **Many campaigns, one server** — players you approve can start their own campaign: its own Emberfall (town,
+  unlocks, story progress, chronicle, difficulty). Owners invite friends by email (which also adds them to the Cloudflare
+  guest list) or share a join code, and manage members on the Campaign page. Heroes, Embers and Curio Shop items travel
+  with the player between campaigns. The AI DM is paid per campaign: the owner's own Anthropic key (stored encrypted),
+  or the site owner can lend the server key with a monthly cap; otherwise that campaign uses the Scripted DM.
 - **Embers & the Curio Shop** — a player-level reward currency (separate from in-game gold) earned by finishing
   scenarios (more on Hard/Brutal), felling foes, levelling up, completing personal quests, retiring heroes and a daily
   first-adventure bonus. Spend it on dice skins (everyone at the table sees your dice), page/dice-tray backdrops, and

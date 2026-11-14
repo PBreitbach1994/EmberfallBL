@@ -171,6 +171,27 @@ export interface CampaignState {
   retired: { characterId: string; name: string; classId: ClassId; questId?: string; week: number; prestige?: boolean }[];
   chronicle: { week: number; text: string }[];
   settings: CampaignSettings;
+  /** multi-campaign: who runs it and who plays in it */
+  ownerUserId?: string;
+  members?: CampaignMember[];
+  /** code players can use to join (shown to the owner) */
+  joinCode?: string;
+  /** AI Dungeon Master billing for this campaign */
+  ai?: CampaignAi;
+}
+
+export interface CampaignMember { userId: string; role: "owner" | "player"; joinedAt: number }
+
+export interface CampaignAi {
+  /** the site owner lets this campaign use the server's Anthropic key */
+  useSiteKey?: boolean;
+  /** monthly cap (USD) on the server key for this campaign; undefined = no cap */
+  siteMonthlyCapUsd?: number;
+  /** the campaign owner's own key, encrypted at rest (never sent to clients) */
+  keyEnc?: string;
+  /** last 4 characters of the owner's key, for display */
+  keyHint?: string;
+  usage?: { month: string; siteUsd: number; ownUsd: number };
 }
 
 export type Difficulty = "story" | "normal" | "hard" | "brutal";

@@ -7,10 +7,14 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { NewAdventureRequest, ServerMessage, AdventureView } from "@tavern/engine";
 import { Store, newId, newToken, type UserRecord } from "./store.js";
-import { Game, HttpError } from "./game.js";
+import { Game, HttpError, LEGACY_CAMPAIGN_ID } from "./game.js";
 import { Town } from "./town.js";
-import { aiAvailable } from "./dm.js";
 import { AccessPolicySync } from "./cloudflare.js";
+import Anthropic from "@anthropic-ai/sdk";
+import {
+  addMember, campaignsFor, canManage, encrypt, initSecret, manageView, newJoinCode, publicCampaign, roleIn, runInCampaign,
+  siteKeyConfigured, summaryOf,
+} from "./campaigns.js";
 import { accessConfigFromEnv, accessTokenFrom, adminEmails, verifyAccessJwt } from "./auth.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +24,7 @@ const INVITE_CODE = process.env.INVITE_CODE || "emberfall";
 const WEB_DIST = process.env.WEB_DIST || path.resolve(here, "../../web/dist");
 
 const store = new Store(path.join(DATA_DIR, "emberfall.db"));
+initSecret(DATA_DIR);
 const game = new Game(store);
 const town = new Town(game);
 
@@ -30,7 +35,7 @@ type AuthedRequest = Request & { user: UserRecord; accessEmail?: string };
 
 const ACCESS = accessConfigFromEnv();
 const ALLOW_INVITE_LOGIN = !ACCESS || process.env.ALLOW_INVITE_LOGIN === "true";
-const publicUser = (u: UserRecord) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin, email: u.email, altEmails: u.altEmails, revoked: !!u.revoked });
+const publicUser = (u: UserRecord) => ({ id: u.id, name: u.name, isAdmin: u.isAdmin, email: u.email, altEmails: u.altEmails, revoked: !!u.revoked, canCreateCampaigns: !!(u.canCreateCampaigns || u.isAdmin) });
 const accessList = new AccessPolicySync();
 
 /** Resolve the caller. In Access mode the verified Cloudflare identity wins; tokens are only a fallback
@@ -111,6 +116,12 @@ app.post("/api/auth/profile", wrap(async (req) => {
   if (adminEmails().includes(id.email)) user.isAdmin = true;
   user.lastSeen = Date.now();
   store.saveUser(user);
+  game.adoptLegacy();
+  // someone added to the guest list directly (not through a campaign invite) lands in the original campaign
+  if (!campaignsFor(store, user).length) {
+    const legacy = store.campaigns.get(LEGACY_CAMPAIGN_ID);
+    if (legacy) { addMember(legacy, user.id); store.saveCampaign(legacy); }
+  }
   return { user: publicUser(user), token: user.token };
 }));
 
@@ -125,11 +136,40 @@ app.post("/api/auth/join", wrap((req) => {
   if (!user) user = { id: newId("usr"), name, token: "", isAdmin: store.users.size === 0, createdAt: Date.now(), prestigePerks: [] };
   user.token = newToken();
   store.saveUser(user);
+  game.adoptLegacy();
+  // the site invite code has always meant "join the original campaign"
+  const legacy = store.campaigns.get(LEGACY_CAMPAIGN_ID);
+  if (legacy && !legacy.members?.some((m) => m.userId === user!.id)) { addMember(legacy, user.id); store.saveCampaign(legacy); }
   return { user: publicUser(user), token: user.token };
 }));
-app.get("/api/health", (_req, res) => { res.json({ ok: true, ai: aiAvailable() }); });
+app.get("/api/health", (_req, res) => { res.json({ ok: true, ai: siteKeyConfigured() }); });
 
 app.use("/api", auth);
+
+/** Every request runs "inside" a campaign: the one named by the X-Campaign header, else the player's first. */
+app.use("/api", (req, _res, next) => {
+  const u = (req as AuthedRequest).user;
+  const asked = req.header("x-campaign") || (typeof req.query.campaign === "string" ? req.query.campaign : "");
+  let id: string | undefined;
+  if (asked) {
+    const c = store.campaigns.get(asked);
+    if (c && roleIn(c, u)) id = c.id;
+  }
+  if (!id) id = campaignsFor(store, u).sort((a, b) => a.createdAt - b.createdAt)[0]?.id;
+  if (!id && u.isAdmin) id = [...store.campaigns.values()][0]?.id;
+  runInCampaign(id, () => next());
+});
+const requireManage = (req: AuthedRequest) => {
+  const c = game.campaign();
+  if (!canManage(c, req.user)) throw new HttpError(403, "Only this campaign's owner can do that.");
+  return c;
+};
+const requireMemberOf = (req: AuthedRequest, campaignId: string) => {
+  const c = store.campaigns.get(campaignId);
+  if (!c || !roleIn(c, req.user)) throw new HttpError(403, "You're not part of that campaign.");
+  return c;
+};
+
 app.get("/api/me", wrap((req) => ({ user: publicUser(req.user) })));
 
 // ---- Embers & the Curio Shop
@@ -144,11 +184,91 @@ app.post("/api/rewards/use", wrap(async (req) => {
   return { message, rewards: game.rewards.view(req.user) };
 }));
 
+// ---- campaigns
+app.get("/api/campaigns", wrap((req) => {
+  const mine = campaignsFor(store, req.user);
+  const list = req.user.isAdmin ? [...store.campaigns.values()] : mine;
+  return { campaigns: list.sort((a, b) => a.createdAt - b.createdAt).map((c) => summaryOf(store, c, req.user)), canCreate: !!(req.user.canCreateCampaigns || req.user.isAdmin) };
+}));
+
+app.post("/api/campaigns", wrap((req) => {
+  if (!req.user.canCreateCampaigns && !req.user.isAdmin) throw new HttpError(403, "Ask the site owner to let you start campaigns.");
+  const owned = [...store.campaigns.values()].filter((c) => c.ownerUserId === req.user.id).length;
+  if (!req.user.isAdmin && owned >= 5) throw new HttpError(400, "You already run 5 campaigns.");
+  const name = String(req.body?.name ?? "").trim();
+  if (name.length < 3) throw new HttpError(400, "Give your campaign a name.");
+  const c = game.createCampaign(name, req.user);
+  return { campaign: summaryOf(store, c, req.user) };
+}));
+
+app.post("/api/campaigns/join", wrap((req) => {
+  const code = String(req.body?.code ?? "").trim().toLowerCase();
+  const c = [...store.campaigns.values()].find((x) => x.joinCode && x.joinCode.toLowerCase() === code);
+  if (!c) throw new HttpError(404, "No campaign uses that code.");
+  addMember(c, req.user.id);
+  store.saveCampaign(c);
+  game.broadcastCampaign();
+  return { campaign: summaryOf(store, c, req.user) };
+}));
+
+app.get("/api/campaign/manage", wrap((req) => manageView(store, requireManage(req))));
+
+app.post("/api/campaign/manage", wrap((req) => {
+  const c = requireManage(req);
+  const b = req.body ?? {};
+  if (typeof b.name === "string" && b.name.trim().length >= 3) c.name = b.name.trim().slice(0, 48);
+  if (b.newJoinCode) c.joinCode = newJoinCode();
+  if (typeof b.transferTo === "string") {
+    if (!c.members?.some((m) => m.userId === b.transferTo)) throw new HttpError(400, "They need to be a member first.");
+    for (const m of c.members ?? []) if (m.role === "owner") m.role = "player";
+    addMember(c, b.transferTo, "owner");
+    c.ownerUserId = b.transferTo;
+  }
+  store.saveCampaign(c);
+  game.broadcastCampaign();
+  return manageView(store, c);
+}));
+
+/** The owner's own Anthropic key pays for this campaign's AI DM. It's checked, then stored encrypted. */
+app.post("/api/campaign/ai-key", wrap(async (req) => {
+  const c = requireManage(req);
+  c.ai = c.ai ?? {};
+  const key = String(req.body?.apiKey ?? "").trim();
+  if (!key) { delete c.ai.keyEnc; delete c.ai.keyHint; store.saveCampaign(c); return manageView(store, c); }
+  if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(key)) throw new HttpError(400, "That doesn't look like an Anthropic API key (it starts with sk-ant-).");
+  try { await new Anthropic({ apiKey: key, maxRetries: 1, timeout: 20_000 }).models.list({ limit: 1 }); }
+  catch (e) { throw new HttpError(400, `Anthropic didn't accept that key: ${(e as Error).message.slice(0, 160)}`); }
+  c.ai.keyEnc = encrypt(key);
+  c.ai.keyHint = key.slice(-4);
+  store.saveCampaign(c);
+  return manageView(store, c);
+}));
+
+app.post("/api/campaign/members/:userId/remove", wrap(async (req) => {
+  const c = game.campaign();
+  const self = req.params.userId === req.user.id;
+  if (!self && !canManage(c, req.user)) throw new HttpError(403, "Only the owner can remove players.");
+  const m = c.members?.find((x) => x.userId === req.params.userId);
+  if (!m) throw new HttpError(404, "Not a member.");
+  if (m.role === "owner") throw new HttpError(400, self ? "Hand the campaign to someone else before leaving." : "You can't remove the owner.");
+  c.members = (c.members ?? []).filter((x) => x !== m);
+  store.saveCampaign(c);
+  // if they're no longer in any campaign, take them off the Cloudflare guest list too
+  const u = store.users.get(req.params.userId);
+  let note = "";
+  if (u && !u.isAdmin && !campaignsFor(store, u).length && accessList.configured) {
+    for (const e of emailsOfUser(u)) { try { if (await accessList.remove(e)) note = " They're no longer in any campaign, so their email was removed from the guest list."; } catch { /* best effort */ } }
+  }
+  game.broadcastCampaign();
+  return { ok: true, message: `${u?.name ?? "Player"} ${self ? "left" : "was removed from"} ${c.name}.${note}` };
+}));
+
 // ---- the company: everyone can see who's adventuring
 app.get("/api/roster", wrap(() => {
   const owners = store.users;
+  const members = new Set((game.campaign().members ?? []).map((m) => m.userId));
   return {
-    heroes: [...store.characters.values()].filter((c) => c.ownerId !== "ai").map((c) => ({
+    heroes: [...store.characters.values()].filter((c) => c.ownerId !== "ai" && members.has(c.ownerId)).map((c) => ({
       id: c.id, name: c.name, classId: c.classId, species: c.species, level: c.level, dead: c.dead, retired: c.retired, prestige: c.prestige,
       player: owners.get(c.ownerId)?.name ?? "?", onAdventure: !!c.activeAdventureId,
     })),
@@ -163,6 +283,11 @@ app.get("/api/admin/overview", wrap((req) => {
   const chars = [...store.characters.values()];
   return {
     authMode: ACCESS ? "access" : "invite",
+    campaigns: [...store.campaigns.values()].map((c) => {
+      const v = manageView(store, c);
+      return { id: c.id, name: c.name, ownerName: store.users.get(c.ownerUserId ?? "")?.name ?? "—", members: v.members.length, week: c.week, aiMode: v.ai.mode,
+        useSiteKey: v.ai.useSiteKey, siteMonthlyCapUsd: v.ai.siteMonthlyCapUsd, siteUsd: v.ai.usage.siteUsd, ownUsd: v.ai.usage.ownUsd, month: v.ai.usage.month };
+    }),
     users: [...store.users.values()].map((u) => ({ ...publicUser(u), createdAt: u.createdAt, lastSeen: u.lastSeen, characters: chars.filter((c) => c.ownerId === u.id).length, embers: game.rewards.wallet(u).embers })),
     characters: chars,
     adventures: [...store.adventures.values()].sort((a, b) => b.updatedAt - a.updatedAt).map((a) => ({
@@ -191,6 +316,7 @@ app.post("/api/admin/users/:id", wrap(async (req) => {
     }
   }
   if (typeof b.name === "string" && b.name.trim()) u.name = b.name.trim().slice(0, 32);
+  if (typeof b.canCreateCampaigns === "boolean") u.canCreateCampaigns = b.canCreateCampaigns;
   if (typeof b.isAdmin === "boolean") {
     if (!b.isAdmin && u.isAdmin && [...store.users.values()].filter((x) => x.isAdmin).length <= 1) throw new HttpError(400, "The campaign needs at least one owner.");
     u.isAdmin = b.isAdmin;
@@ -212,7 +338,7 @@ app.get("/api/admin/access", wrap(async (req) => {
 
 /** Invite a player by email: creates (or re-enables) their player and adds them to the Cloudflare guest list. */
 app.post("/api/admin/invite", wrap(async (req) => {
-  requireAdmin(req);
+  const camp = requireManage(req);
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!EMAIL_RE.test(email)) throw new HttpError(400, "Enter a valid email address.");
   let user = store.userByEmail(email);
@@ -229,12 +355,15 @@ app.post("/api/admin/invite", wrap(async (req) => {
   }
   user.revoked = false;
   store.saveUser(user);
+  addMember(camp, user.id);
+  store.saveCampaign(camp);
   let cf = "";
   if (accessList.configured) {
     try { cf = (await accessList.add(email)) ? " and added to the Cloudflare guest list" : " (already on the Cloudflare guest list)"; }
     catch (e) { cf = `, but Cloudflare couldn't be updated: ${(e as Error).message}. Add the email to the Access policy by hand.`; }
   } else cf = ". Cloudflare sync isn't set up, so also add this email to the Access policy by hand";
-  return { ok: true, message: `${user.name} (${email}) ${created ? "invited" : "re-enabled"}${cf}.` };
+  game.broadcastCampaign();
+  return { ok: true, message: `${user.name} (${email}) ${created ? "invited to" : "added to"} ${camp.name}${cf}.` };
 }));
 
 /** Grant or remove a player's access. Removing keeps their characters; re-granting restores everything. */
@@ -304,6 +433,23 @@ app.post("/api/admin/users/:id/merge", wrap((req) => {
   return { ok: true, message: `Moved ${moved} character(s) from ${from.name} to ${into.name}.` };
 }));
 
+/** The site owner lends the server's AI key to a campaign, optionally with a monthly cap. */
+app.post("/api/admin/campaigns/:id/ai", wrap((req) => {
+  requireAdmin(req);
+  const c = store.campaigns.get(req.params.id);
+  if (!c) throw new HttpError(404, "No such campaign.");
+  c.ai = c.ai ?? {};
+  if (typeof req.body?.useSiteKey === "boolean") c.ai.useSiteKey = req.body.useSiteKey;
+  if (req.body?.siteMonthlyCapUsd === null || req.body?.siteMonthlyCapUsd === "") delete c.ai.siteMonthlyCapUsd;
+  else if (req.body?.siteMonthlyCapUsd !== undefined) {
+    const cap = Number(req.body.siteMonthlyCapUsd);
+    if (!Number.isFinite(cap) || cap < 0 || cap > 10000) throw new HttpError(400, "Cap must be between 0 and 10000 USD.");
+    c.ai.siteMonthlyCapUsd = cap;
+  }
+  store.saveCampaign(c);
+  return { ok: true, message: `${c.name}: ${c.ai.useSiteKey ? `uses your key${c.ai.siteMonthlyCapUsd !== undefined ? ` up to $${c.ai.siteMonthlyCapUsd}/month` : " (no cap)"}` : "doesn't use your key"}.` };
+}));
+
 app.post("/api/admin/users/:id/embers", wrap((req) => {
   requireAdmin(req);
   const u = store.users.get(req.params.id);
@@ -349,7 +495,7 @@ app.post("/api/characters/:id/prestige", wrap((req) => ({ character: town.presti
 app.delete("/api/characters/:id", wrap((req) => { town.remove(req.user, req.params.id); return { ok: true }; }));
 
 // ---- campaign & town
-app.get("/api/campaign", wrap(() => town.view()));
+app.get("/api/campaign", wrap((req) => town.view(req.user)));
 const townOp = (fn: (req: AuthedRequest) => string) => wrap((req) => { const message = fn(req); game.broadcastCampaign(); return { ok: true, message }; });
 app.post("/api/town/build", townOp((req) => town.build(String(req.body?.buildingId))));
 app.post("/api/town/buy", townOp((req) => town.buy(req.user, String(req.body?.characterId), String(req.body?.itemId))));
@@ -357,8 +503,7 @@ app.post("/api/town/sell", townOp((req) => town.sell(req.user, String(req.body?.
 app.post("/api/town/donate", townOp((req) => town.donate(req.user, String(req.body?.characterId), Number(req.body?.amount))));
 app.post("/api/town/raise", townOp((req) => town.raiseDead(req.user, String(req.body?.characterId), req.body?.rite === "resurrect" ? "resurrect" : "raise")));
 app.post("/api/campaign/settings", wrap((req) => {
-  if (!req.user.isAdmin) throw new HttpError(403, "Only the campaign owner can change settings.");
-  const c = game.campaign();
+  const c = requireManage(req);
   const s = req.body ?? {};
   for (const k of ["hardcore", "aiDm", "aiCompanionBanter", "autoReactions", "allowAutonomousParties", "flanking"] as const) if (typeof s[k] === "boolean") c.settings[k] = s[k];
   if (["story", "normal", "hard", "brutal"].includes(s.difficulty)) {
@@ -381,9 +526,10 @@ app.post("/api/adventures", wrap(async (req) => {
   const adv = await game.createAdventure(req.user, body);
   return { view: game.view(adv, req.user.id) };
 }));
-app.get("/api/adventures/:id", wrap((req) => ({ view: game.view(game.getAdventure(req.params.id), req.user.id) })));
-app.post("/api/adventures/:id/join", wrap(async (req) => ({ view: game.view(await game.join(req.user, req.params.id, String(req.body?.characterId)), req.user.id) })));
+app.get("/api/adventures/:id", wrap((req) => { const a = game.getAdventure(req.params.id); requireMemberOf(req, a.campaignId); return { view: game.view(a, req.user.id) }; }));
+app.post("/api/adventures/:id/join", wrap(async (req) => { requireMemberOf(req, game.getAdventure(req.params.id).campaignId); return { view: game.view(await game.join(req.user, req.params.id, String(req.body?.characterId)), req.user.id) }; }));
 app.post("/api/adventures/:id/act", wrap(async (req) => {
+  requireMemberOf(req, game.getAdventure(req.params.id).campaignId);
   const adv = await game.act(req.user, req.params.id, req.body?.characterId, req.body?.action);
   return { view: game.view(adv, req.user.id) };
 }));
@@ -426,9 +572,11 @@ wss.on("connection", async (ws, req) => {
     try {
       const msg = JSON.parse(String(raw));
       if (msg?.type === "subscribe" && typeof msg.adventureId === "string") {
-        client.adventureId = msg.adventureId;
         const adv = store.adventures.get(msg.adventureId);
-        if (adv) send(client, { type: "adventure", view: game.view(adv, user.id) });
+        const c = adv ? store.campaigns.get(adv.campaignId) : undefined;
+        if (!adv || !c || !roleIn(c, user)) return; // only members may watch
+        client.adventureId = msg.adventureId;
+        send(client, { type: "adventure", view: game.view(adv, user.id) });
       }
     } catch { /* ignore */ }
   });
@@ -452,5 +600,5 @@ if (BACKUP_HOURS > 0) {
 }
 
 server.listen(PORT, () => {
-  console.log(`🏮 Emberfall is open on http://localhost:${PORT}  (AI DM: ${aiAvailable() ? "enabled" : "disabled — set ANTHROPIC_API_KEY"}; ${ACCESS ? `sign-in: Cloudflare Access (${ACCESS.teamDomain})${ALLOW_INVITE_LOGIN ? " + invite code" : ""}` : `invite code: ${INVITE_CODE === "emberfall" ? "emberfall (default — set INVITE_CODE!)" : "set"}`})`);
+  console.log(`🏮 Emberfall is open on http://localhost:${PORT}  (site AI key: ${siteKeyConfigured() ? "configured" : "not set — campaigns can bring their own"}; ${ACCESS ? `sign-in: Cloudflare Access (${ACCESS.teamDomain})${ALLOW_INVITE_LOGIN ? " + invite code" : ""}` : `invite code: ${INVITE_CODE === "emberfall" ? "emberfall (default — set INVITE_CODE!)" : "set"}`})`);
 });

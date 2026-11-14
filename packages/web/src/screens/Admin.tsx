@@ -9,7 +9,7 @@ const when = (t?: number) => (t ? new Date(t).toLocaleString() : "never");
 
 export function Admin({ ctx }: { ctx: AppCtx }) {
   const [data, setData] = useState<AdminOverview | null>(null);
-  const [tab, setTab] = useState<"players" | "characters" | "adventures">("players");
+  const [tab, setTab] = useState<"players" | "campaigns" | "characters" | "adventures">("players");
   const [filter, setFilter] = useState("");
   const [access, setAccess] = useState<AccessListView | null>(null);
   const load = useCallback(async () => {
@@ -34,9 +34,10 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
     <div className="admin">
       <section className="panel">
         <h1>The Ledger</h1>
-        <p className="muted">Everything in the campaign: players, every character, and every adventure. Sign-in mode: <strong>{data.authMode === "access" ? "Cloudflare Access (email)" : "invite code"}</strong>.</p>
+        <p className="muted">Everything on this server: every player, campaign, character and adventure. Sign-in mode: <strong>{data.authMode === "access" ? "Cloudflare Access (email)" : "invite code"}</strong>.</p>
         <div className="tabs">
           <button className={tab === "players" ? "active" : ""} onClick={() => setTab("players")}>Players ({data.users.length})</button>
+          <button className={tab === "campaigns" ? "active" : ""} onClick={() => setTab("campaigns")}>Campaigns ({data.campaigns.length})</button>
           <button className={tab === "characters" ? "active" : ""} onClick={() => setTab("characters")}>Characters ({data.characters.length})</button>
           <button className={tab === "adventures" ? "active" : ""} onClick={() => setTab("adventures")}>Adventures ({data.adventures.length})</button>
         </div>
@@ -50,7 +51,7 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
           <p className="muted">Link each player's sign-in email so they land on their existing account when they sign in. If someone made a second account by accident, merge it into the right one — characters and adventures move with it.</p>
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Name</th><th>Sign-in email</th><th>Access</th><th>🔥 Embers</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
+              <thead><tr><th>Name</th><th>Sign-in email</th><th>Access</th><th title="May start their own campaigns">Can start campaigns</th><th>🔥 Embers</th><th>Chars</th><th>Last seen</th><th>Owner</th><th>Merge into…</th></tr></thead>
               <tbody>
                 {data.users.filter((u) => !f || u.name.toLowerCase().includes(f) || (u.email ?? "").includes(f)).map((u) => (
                   <tr key={u.id}>
@@ -63,6 +64,7 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
                         : <button className="linkbtn" onClick={() => { if (confirm(`Remove ${u.name}'s access? Their characters are kept and you can restore them later.`)) post(`/admin/users/${u.id}/access`, { grant: false }); }}>Remove</button>)}
                       {!u.revoked && u.email && access?.configured && !access.error && !access.emails.includes(u.email) && <button className="linkbtn" onClick={() => post(`/admin/users/${u.id}/access`, { grant: true })}>Add to list</button>}
                     </td>
+                    <td><input type="checkbox" checked={!!u.canCreateCampaigns} disabled={u.isAdmin} onChange={(e) => post(`/admin/users/${u.id}`, { canCreateCampaigns: e.target.checked })} /></td>
                     <td>
                       {u.embers ?? 0}{" "}
                       <button className="linkbtn" onClick={() => { const v = prompt(`Give ${u.name} how many Embers? (negative to take)`, "25"); const n = Number(v); if (v && n) post(`/admin/users/${u.id}/embers`, { amount: n }); }}>Gift</button>
@@ -76,6 +78,32 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
                         {data.users.filter((x) => x.id !== u.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
                       </select>
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {tab === "campaigns" && (
+        <section className="panel">
+          <p className="muted">Every campaign on this server. Owners can bring their own Anthropic key; you can also lend a campaign the server's key with a monthly cap (estimated from token counts). When a cap is reached that campaign falls back to the Scripted DM until next month.</p>
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Campaign</th><th>Owner</th><th>Members</th><th>Week</th><th>AI</th><th>Lend my key</th><th>Monthly cap ($)</th><th>This month</th><th></th></tr></thead>
+              <tbody>
+                {data.campaigns.filter((c) => !f || c.name.toLowerCase().includes(f) || c.ownerName.toLowerCase().includes(f)).map((c) => (
+                  <tr key={c.id}>
+                    <td><strong>{c.name}</strong></td>
+                    <td>{c.ownerName}</td>
+                    <td>{c.members}</td>
+                    <td>{c.week}</td>
+                    <td>{c.aiMode === "own-key" ? <Pill>own key</Pill> : c.aiMode === "site-key" ? <Pill>your key</Pill> : <Pill kind="warn">off</Pill>}</td>
+                    <td><input type="checkbox" checked={c.useSiteKey} onChange={(e) => post(`/admin/campaigns/${c.id}/ai`, { useSiteKey: e.target.checked })} /></td>
+                    <td><CapCell cap={c.siteMonthlyCapUsd} onSave={(v) => post(`/admin/campaigns/${c.id}/ai`, { siteMonthlyCapUsd: v })} /></td>
+                    <td className="small">your key ${c.siteUsd.toFixed(2)} · theirs ${c.ownUsd.toFixed(2)}</td>
+                    <td><button className="linkbtn" onClick={() => ctx.switchCampaign(c.id)}>Open</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -178,5 +206,17 @@ function InvitePanel({ access, onInvite, onRemoveEmail }: { access: AccessListVi
         </div>
       ) : null}
     </section>
+  );
+}
+
+function CapCell({ cap, onSave }: { cap?: number; onSave: (v: number | null) => void }) {
+  const [v, setV] = useState(cap === undefined ? "" : String(cap));
+  useEffect(() => setV(cap === undefined ? "" : String(cap)), [cap]);
+  const dirty = v !== (cap === undefined ? "" : String(cap));
+  return (
+    <span style={{ display: "inline-flex", gap: 6 }}>
+      <input type="number" min={0} step={1} placeholder="no cap" value={v} onChange={(e) => setV(e.target.value)} style={{ width: 90 }} />
+      {dirty && <button onClick={() => onSave(v === "" ? null : Number(v))}>Save</button>}
+    </span>
   );
 }

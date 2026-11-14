@@ -1,10 +1,33 @@
 // Shared contract between the server and the web client.
 import type { AbilityScores, CharacterSheet, ClassId, CombatCommand, EncounterState, LogEntry, Skill, Ability, Point } from "./types.js";
-import type { CampaignState, BuildingDef } from "./campaign/types.js";
+import type { CampaignState, BuildingDef, CampaignSettings } from "./campaign/types.js";
 import type { CharacterCreationInput, LevelUpChoices } from "./rules/character.js";
 import type { DmMode } from "./campaign/adventure.js";
 
-export interface UserInfo { id: string; name: string; isAdmin: boolean; email?: string; altEmails?: string[]; revoked?: boolean }
+export interface UserInfo { id: string; name: string; isAdmin: boolean; email?: string; altEmails?: string[]; revoked?: boolean; canCreateCampaigns?: boolean }
+
+/** A campaign as listed for a player (the switcher and the landing page). */
+export interface CampaignSummary {
+  id: string;
+  name: string;
+  role: "owner" | "player" | "site-admin";
+  ownerName: string;
+  members: number;
+  week: number;
+  completed: number;
+  aiMode: "own-key" | "site-key" | "none";
+}
+
+/** What the campaign owner sees on the Campaign screen. */
+export interface CampaignManageView {
+  id: string;
+  name: string;
+  joinCode: string;
+  ownerUserId: string;
+  members: { userId: string; name: string; email?: string; role: "owner" | "player"; joinedAt: number; lastSeen?: number; heroes: number }[];
+  ai: { mode: "own-key" | "site-key" | "none"; ownKeyHint?: string; useSiteKey: boolean; siteMonthlyCapUsd?: number; usage: { month: string; siteUsd: number; ownUsd: number }; siteKeyConfigured: boolean };
+  settings: CampaignSettings;
+}
 
 export interface AccessListView { configured: boolean; policyName?: string; emails: string[]; unlinked: string[]; error?: string }
 
@@ -16,6 +39,7 @@ export type AuthConfig =
 
 export interface AdminOverview {
   authMode: "access" | "invite";
+  campaigns: { id: string; name: string; ownerName: string; members: number; week: number; aiMode: string; useSiteKey: boolean; siteMonthlyCapUsd?: number; siteUsd: number; ownUsd: number; month: string }[];
   users: (UserInfo & { createdAt: number; lastSeen?: number; characters: number; embers?: number })[];
   characters: CharacterSheet[];
   adventures: { id: string; title: string; status: string; dmMode: string; startedAt: number; updatedAt: number; host: string; autonomous: boolean; party: { name: string; player: string }[] }[];
@@ -102,6 +126,8 @@ export interface CampaignView {
   adventures: AdventureSummary[];
   world: { name: string; tavern: string; overview: string; keeper: { name: string; description: string } };
   aiAvailable: boolean;
+  /** the viewer's role in this campaign */
+  role?: "owner" | "player" | "site-admin";
 }
 
 export type AdventureAction =

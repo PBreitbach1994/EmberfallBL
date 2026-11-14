@@ -11,19 +11,34 @@ import {
   type AdventureContext, type AdventureState, type CharacterSheet, type Skill, type Ability, type LogEntry, type SceneNode,
 } from "@tavern/engine";
 import { WORLD, DM_STYLE_GUIDE } from "@tavern/engine/content";
+import type { CampaignState } from "@tavern/engine";
+import { aiMode, costUsd, ownKey, recordUsage, type AiMode } from "./campaigns.js";
 
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
 const SKILLS = Object.keys(SKILL_NAMES) as Skill[];
 const ABILITIES: Ability[] = ["str", "dex", "con", "int", "wis", "cha"];
 const NARRATIVE_DAMAGE = ["1d4", "1d6", "2d4", "2d6"];
 
-let client: Anthropic | null = null;
-export function aiAvailable(): boolean {
-  return !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+let siteClient: Anthropic | null = null;
+const ownClients = new Map<string, Anthropic>();
+
+/** Is an AI DM available for this campaign (its owner's key, or the site key within its cap)? */
+export function aiAvailable(c?: CampaignState): boolean {
+  return aiMode(c) !== "none";
 }
-function getClient(): Anthropic {
-  if (!client) client = new Anthropic({ maxRetries: 2, timeout: 120_000 });
-  return client;
+function clientFor(c: CampaignState | undefined): { client: Anthropic; mode: AiMode } {
+  const mode = aiMode(c);
+  if (mode === "own-key" && c) {
+    const key = ownKey(c)!;
+    let cl = ownClients.get(key);
+    if (!cl) { cl = new Anthropic({ apiKey: key, maxRetries: 2, timeout: 120_000 }); ownClients.set(key, cl); }
+    return { client: cl, mode };
+  }
+  if (mode === "site-key") {
+    if (!siteClient) siteClient = new Anthropic({ maxRetries: 2, timeout: 120_000 });
+    return { client: siteClient, mode };
+  }
+  throw new Error("No AI Dungeon Master is configured for this campaign.");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -213,9 +228,9 @@ export function runTool(adv: AdventureState, ctx: AdventureContext, name: string
 // ---------------------------------------------------------------------------------------------
 // Model calls
 
-async function callClaude(params: { messages: Anthropic.Beta.BetaMessageParam[]; tools?: Anthropic.Beta.BetaTool[]; effort?: "low" | "medium" | "high"; maxTokens?: number }) {
-  const c = getClient();
-  return c.beta.messages.create({
+async function callClaude(campaign: CampaignState | undefined, params: { messages: Anthropic.Beta.BetaMessageParam[]; tools?: Anthropic.Beta.BetaTool[]; effort?: "low" | "medium" | "high"; maxTokens?: number }) {
+  const { client: c, mode } = clientFor(campaign);
+  const msg = await c.beta.messages.create({
     model: MODEL,
     max_tokens: params.maxTokens ?? 4000,
     system: systemPrompt(),
@@ -225,6 +240,8 @@ async function callClaude(params: { messages: Anthropic.Beta.BetaMessageParam[];
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
   });
+  if (campaign) recordUsage(campaign, mode, costUsd(msg.usage));
+  return msg;
 }
 
 function textOf(msg: Anthropic.Beta.BetaMessage): string {
@@ -233,7 +250,7 @@ function textOf(msg: Anthropic.Beta.BetaMessage): string {
 
 /** Expand a scene's authored text into live narration. */
 export async function narrateScene(adv: AdventureState, ctx: AdventureContext, node: SceneNode): Promise<string> {
-  const msg = await callClaude({
+  const msg = await callClaude(ctx.campaign, {
     effort: "low",
     maxTokens: 1500,
     messages: [{ role: "user", content: `${sceneContext(adv, ctx)}\n\nThe party has just arrived at this scene. Narrate it for the players in 1-2 short paragraphs, keeping every authored fact. Introduce NPCs present (without revealing secrets). Optionally include one brief in-character line from an AI companion. Don't list options.` }],
@@ -250,7 +267,7 @@ export async function handlePlayerAction(adv: AdventureState, ctx: AdventureCont
   }];
   const state = { optionChosen: false };
   for (let i = 0; i < 5; i++) {
-    const msg = await callClaude({ messages, tools: TOOLS, effort: "medium", maxTokens: 3000 });
+    const msg = await callClaude(ctx.campaign, { messages, tools: TOOLS, effort: "medium", maxTokens: 3000 });
     if (msg.stop_reason === "refusal") return "The DM pauses, then gently steers the story elsewhere. (That request was declined; try a different approach.)";
     const uses = msg.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use");
     if (msg.stop_reason !== "tool_use" || !uses.length) return textOf(msg) || "…";
@@ -268,7 +285,7 @@ export async function handlePlayerAction(adv: AdventureState, ctx: AdventureCont
     messages.push({ role: "user", content: results });
     if (adv.status !== "exploring") {
       // story moved into combat or ended: one last narration pass without tools
-      const fin = await callClaude({ messages, effort: "low", maxTokens: 1200 });
+      const fin = await callClaude(ctx.campaign, { messages, effort: "low", maxTokens: 1200 });
       return textOf(fin) || "";
     }
   }
@@ -277,7 +294,7 @@ export async function handlePlayerAction(adv: AdventureState, ctx: AdventureCont
 
 /** AI companion chooses what to do in an exploration scene (autonomous play / "let my companion decide"). */
 export async function companionDecide(adv: AdventureState, ctx: AdventureContext, companion: CharacterSheet): Promise<{ say: string; optionId?: string }> {
-  const msg = await callClaude({
+  const msg = await callClaude(ctx.campaign, {
     effort: "low",
     maxTokens: 800,
     messages: [{
@@ -299,7 +316,7 @@ export async function companionDecide(adv: AdventureState, ctx: AdventureContext
 /** AI players respond to a human DM's narration. */
 export async function companionsReact(adv: AdventureState, ctx: AdventureContext, companions: CharacterSheet[], dmText: string): Promise<{ id: string; text: string }[]> {
   if (!companions.length) return [];
-  const msg = await callClaude({
+  const msg = await callClaude(ctx.campaign, {
     effort: "low",
     maxTokens: 1200,
     messages: [{
@@ -319,7 +336,7 @@ export async function companionsReact(adv: AdventureState, ctx: AdventureContext
 /** A chronicle entry summarising an adventure (for autonomous parties and the tavern feed). */
 export async function chronicle(adv: AdventureState, ctx: AdventureContext): Promise<string> {
   const log = adv.log.filter((l) => l.kind !== "roll").slice(-120).map((l) => l.text).join("\n");
-  const msg = await callClaude({
+  const msg = await callClaude(ctx.campaign, {
     effort: "low",
     maxTokens: 1000,
     messages: [{ role: "user", content: `Write a short tavern-tale (one paragraph, ~120 words, past tense, as the tavern keeper would tell it) of this adventure in "${ctx.scenario.name}":\n${log}` }],
@@ -328,8 +345,8 @@ export async function chronicle(adv: AdventureState, ctx: AdventureContext): Pro
 }
 
 /** A short ballad about a hero for the Curio Shop's Bard's Ballad. */
-export async function writeBallad(facts: Record<string, unknown>): Promise<string> {
-  const msg = await callClaude({
+export async function writeBallad(campaign: CampaignState, facts: Record<string, unknown>): Promise<string> {
+  const msg = await callClaude(campaign, {
     effort: "low",
     maxTokens: 800,
     messages: [{ role: "user", content: `Write a rousing tavern ballad (6-8 short rhyming lines, no title, no commentary) about this adventurer, true to these facts and nothing more:\n${JSON.stringify(facts)}` }],

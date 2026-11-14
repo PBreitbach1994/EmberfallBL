@@ -21,6 +21,8 @@ export interface UserRecord {
   lastSeen?: number;
   /** access removed by the campaign owner (kept so characters survive; re-invite restores it) */
   revoked?: boolean;
+  /** site owner allows this player to start their own campaigns */
+  canCreateCampaigns?: boolean;
   /** Embers wallet and Curio Shop purchases */
   wallet?: Wallet;
 }

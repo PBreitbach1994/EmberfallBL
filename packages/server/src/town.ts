@@ -8,6 +8,7 @@ import { BUILDINGS, PERSONAL_QUESTS, SCENARIOS, WORLD } from "@tavern/engine/con
 import { scenarioAvailable, EMBER_RULES, RAISE_DEAD_DAYS, daysDead, graveMarks, raiseDeadCost, resurrectionCost, reviveSheet } from "@tavern/engine";
 import { HttpError, type Game } from "./game.js";
 import { aiAvailable } from "./dm.js";
+import { publicCampaign, roleIn } from "./campaigns.js";
 import { newId, type UserRecord } from "./store.js";
 import crypto from "node:crypto";
 
@@ -53,10 +54,10 @@ export class Town {
     return items;
   }
 
-  view(): CampaignView {
+  view(viewer?: UserRecord): CampaignView {
     const c = this.campaign;
     return {
-      campaign: c,
+      campaign: publicCampaign(c),
       scenarios: Object.values(SCENARIOS).filter((s) => c.unlockedScenarios.includes(s.id) || (s.requires?.scenarios ?? []).some((x) => c.completedScenarios.includes(x))).map((s) => {
         const a = scenarioAvailable(c, s);
         return { id: s.id, name: s.name, hook: s.hook, summary: s.summary, location: s.location, recommendedLevel: s.recommendedLevel, available: a.ok, reason: a.reason, completed: c.completedScenarios.includes(s.id), mapPosition: s.mapPosition, arc: s.arc };
@@ -70,7 +71,8 @@ export class Town {
       services: this.services(),
       adventures: this.game.summaries(),
       world: { name: WORLD.name, tavern: WORLD.tavern.name, overview: WORLD.overview.join("\n\n"), keeper: { name: WORLD.proprietor.name, description: WORLD.proprietor.personality } },
-      aiAvailable: aiAvailable(),
+      aiAvailable: aiAvailable(c),
+      role: viewer ? roleIn(c, viewer) ?? undefined : undefined,
     };
   }
 

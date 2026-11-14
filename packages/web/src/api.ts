@@ -12,6 +12,10 @@ function safeSet(k: string, v: string | null) {
 }
 
 export function getToken(): string | null { return safeGet(TOKEN_KEY); }
+const CAMPAIGN_KEY = "tavern.campaign";
+/** The campaign this browser is looking at; sent with every request. */
+export function getCampaignId(): string | null { return safeGet(CAMPAIGN_KEY); }
+export function setCampaignId(id: string | null) { safeSet(CAMPAIGN_KEY, id); }
 export function getStoredUser(): UserInfo | null {
   const raw = safeGet(USER_KEY);
   if (!raw) return null;
@@ -35,6 +39,8 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  const cid = getCampaignId();
+  if (cid) headers["X-Campaign"] = cid;
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(`/api${path}`, {
     method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
