@@ -9,7 +9,7 @@ const when = (t?: number) => (t ? new Date(t).toLocaleString() : "never");
 
 export function Admin({ ctx }: { ctx: AppCtx }) {
   const [data, setData] = useState<AdminOverview | null>(null);
-  const [tab, setTab] = useState<"players" | "campaigns" | "characters" | "adventures">("players");
+  const [tab, setTab] = useState<"players" | "campaigns" | "characters" | "adventures" | "server">("players");
   const [filter, setFilter] = useState("");
   const [access, setAccess] = useState<AccessListView | null>(null);
   const load = useCallback(async () => {
@@ -39,6 +39,7 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
           <button className={tab === "players" ? "active" : ""} onClick={() => setTab("players")}>Players ({data.users.length})</button>
           <button className={tab === "campaigns" ? "active" : ""} onClick={() => setTab("campaigns")}>Campaigns ({data.campaigns.length})</button>
           <button className={tab === "characters" ? "active" : ""} onClick={() => setTab("characters")}>Characters ({data.characters.length})</button>
+          <button className={tab === "server" ? "active" : ""} onClick={() => setTab("server")}>Server</button>
           <button className={tab === "adventures" ? "active" : ""} onClick={() => setTab("adventures")}>Adventures ({data.adventures.length})</button>
         </div>
         <input placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} />
@@ -111,6 +112,8 @@ export function Admin({ ctx }: { ctx: AppCtx }) {
           </div>
         </section>
       )}
+
+      {tab === "server" && <ServerPanel />}
 
       {tab === "characters" && (
         <section className="panel">
@@ -218,5 +221,80 @@ function CapCell({ cap, onSave }: { cap?: number; onSave: (v: number | null) => 
       <input type="number" min={0} step={1} placeholder="no cap" value={v} onChange={(e) => setV(e.target.value)} style={{ width: 90 }} />
       {dirty && <button onClick={() => onSave(v === "" ? null : Number(v))}>Save</button>}
     </span>
+  );
+}
+
+interface ServerInfo {
+  version: string; startedAt: number; node: string; campaigns: number; users: number; adventures: number;
+  updater: { ok: boolean; error?: string; branch?: string; fetchOk?: boolean; fetchError?: string;
+    current?: { commit: string; date: string; subject: string };
+    newCommits?: { commit: string; date: string; subject: string }[];
+    localChanges?: string[];
+    job?: { running: boolean; startedAt: number; finishedAt: number; ok: boolean | null; log: string[] } };
+}
+
+/** Version, new commits on GitHub, and one-click update (through the updater container). */
+function ServerPanel() {
+  const [info, setInfo] = useState<ServerInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [waitingFor, setWaitingFor] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    setChecking(true);
+    const r = await attempt(() => api<ServerInfo>("/admin/server"));
+    if (r) setInfo(r);
+    setChecking(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const job = info?.updater.job;
+  // while an update runs, poll its log; once the game restarts, watch /api/health for the new version
+  useEffect(() => {
+    if (!job?.running && !waitingFor) return;
+    const t = window.setInterval(async () => {
+      if (job?.running) { const r = await api<ServerInfo>("/admin/server").catch(() => null); if (r) setInfo(r); return; }
+      const h = await fetch("/api/health").then((x) => x.json()).catch(() => null);
+      if (h?.version && h.version !== waitingFor) { setWaitingFor(null); toast(`Updated to ${h.version}. Reloading…`, "info"); window.setTimeout(() => location.reload(), 1500); }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [job?.running, waitingFor]);
+  if (!info) return <section className="panel">Asking the server…</section>;
+  const u = info.updater;
+  const up = (secs: number) => secs < 3600 ? `${Math.round(secs / 60)} min` : secs < 86400 ? `${(secs / 3600).toFixed(1)} h` : `${(secs / 86400).toFixed(1)} days`;
+  return (
+    <section className="panel server-panel">
+      <h2>Server</h2>
+      <p>Running version <code>{info.version}</code> · up {up((Date.now() - info.startedAt) / 1000)} · Node {info.node} · {info.campaigns} campaigns, {info.users} players, {info.adventures} adventures</p>
+      {!u.ok ? (
+        <div className="notice">
+          <strong>In-game updates aren't enabled yet.</strong> {u.error}
+          <p className="small">One last time on the server: <code>cd /opt/emberfall &amp;&amp; ./scripts/update.sh</code> — after that, updates happen from this page.</p>
+        </div>
+      ) : (
+        <>
+          <p className="small muted">Branch <code>{u.branch}</code> at <code>{u.current?.commit}</code> — “{u.current?.subject}”{u.fetchOk === false && <> · <span className="error">couldn't reach GitHub: {u.fetchError}</span></>}</p>
+          {u.localChanges && u.localChanges.length > 0 && <p className="error small">The server's checkout has local edits, so the update may refuse to pull: {u.localChanges.join(", ")}</p>}
+          {u.newCommits && u.newCommits.length > 0 ? (
+            <>
+              <h3>{u.newCommits.length} update{u.newCommits.length === 1 ? "" : "s"} available</h3>
+              <ul className="commits">{u.newCommits.map((c) => <li key={c.commit}><code>{c.commit}</code> {c.subject} <small className="muted">{new Date(c.date).toLocaleString()}</small></li>)}</ul>
+            </>
+          ) : <p>✓ You're up to date.</p>}
+          <div className="row">
+            <button onClick={load} disabled={checking || job?.running}>{checking ? "Checking…" : "Check for updates"}</button>
+            <button className="primary" disabled={job?.running || !u.newCommits?.length} onClick={async () => {
+              if (!confirm("Back up the database, pull the latest code and restart the game? Players will be disconnected for a few minutes.")) return;
+              const r = await attempt(() => api<{ message: string }>("/admin/server/update", { body: {} }));
+              if (r) { toast(r.message, "info"); setWaitingFor(info.version); load(); }
+            }}>{job?.running ? "Updating…" : "Update now"}</button>
+          </div>
+          {job && job.log.length > 0 && (
+            <>
+              <h3>{job.running ? "Update in progress" : job.ok ? "Last update succeeded" : "Last update failed"} <small className="muted">{new Date(job.startedAt).toLocaleString()}</small></h3>
+              <pre className="update-log">{job.log.join("\n")}</pre>
+            </>
+          )}
+          {waitingFor && !job?.running && <p className="muted">Waiting for the game to come back with the new version…</p>}
+        </>
+      )}
+    </section>
   );
 }

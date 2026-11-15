@@ -1,6 +1,7 @@
 # Emberfall — the game server, plus an optional Cloudflare Tunnel for public HTTPS access.
 #
 #   LAN only:            docker compose up -d --build
+#   (after the first install, update from the game: Admin → Server → Update now)
 #   With the tunnel:     docker compose --profile tunnel up -d --build
 #
 # Settings come from .env (copy .env.example). See docs/DEPLOY.md for the full walkthrough.
@@ -23,6 +24,9 @@ services:
       CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
       CF_ACCESS_POLICY_ID: ${CF_ACCESS_POLICY_ID:-}
       APP_SECRET: ${APP_SECRET:-}
+      APP_VERSION: ${APP_VERSION:-}
+      UPDATER_URL: http://emberfall-updater:8080
+      UPDATER_SECRET: ${UPDATER_SECRET:-}
       BACKUP_HOURS: ${BACKUP_HOURS:-24}
       BACKUP_KEEP: ${BACKUP_KEEP:-14}
       TZ: ${TZ:-America/Chicago}
@@ -32,6 +36,24 @@ services:
       # Published on the LAN for local play/testing. When using only the tunnel you can
       # change this to "127.0.0.1:3000:3000" so it isn't reachable from other machines.
       - "${BIND_ADDR:-0.0.0.0}:${HOST_PORT:-3000}:3000"
+
+  # Lets the campaign owner update the game from Admin → Server. It talks to Docker (to rebuild the game
+  # container) and to this checkout (to git pull); it has no published port and needs UPDATER_SECRET.
+  updater:
+    build:
+      context: .
+      dockerfile: updater/Dockerfile
+    image: emberfall-updater:latest
+    container_name: emberfall-updater
+    restart: unless-stopped
+    environment:
+      UPDATER_SECRET: ${UPDATER_SECRET:-}
+      HOST_REPO_DIR: ${HOST_REPO_DIR:-/opt/emberfall}
+    working_dir: ${HOST_REPO_DIR:-/opt/emberfall}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # mounted at the same path as on the host so compose resolves ./data correctly
+      - ${HOST_REPO_DIR:-/opt/emberfall}:${HOST_REPO_DIR:-/opt/emberfall}
 
   cloudflared:
     image: cloudflare/cloudflared:latest

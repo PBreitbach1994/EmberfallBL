@@ -260,7 +260,13 @@ If your app has several Allow policies, set `CF_ACCESS_POLICY_ID` to the one to 
 
 ## 6. Day-two operations
 
-**Update to the latest version** (takes a pre-update database snapshot, pulls, rebuilds and restarts):
+**Update from the game (no SSH):** after running `./scripts/update.sh` once (it sets up the `updater`
+container and its secret), open **Admin → Server**: it shows the running version and any new commits on GitHub;
+**Update now** backs up the database, pulls, rebuilds and restarts the game, and the page reloads itself when the new
+version is up. The updater has no published port, only answers the game container, and requires `UPDATER_SECRET`;
+it does use the Docker socket (that's how it rebuilds the game), so treat the Admin account as server-level access.
+
+**Update to the latest version from the shell** (takes a pre-update database snapshot, pulls, rebuilds and restarts):
 
 ```bash
 cd /opt/emberfall && ./scripts/update.sh

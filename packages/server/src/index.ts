@@ -142,7 +142,7 @@ app.post("/api/auth/join", wrap((req) => {
   if (legacy && !legacy.members?.some((m) => m.userId === user!.id)) { addMember(legacy, user.id); store.saveCampaign(legacy); }
   return { user: publicUser(user), token: user.token };
 }));
-app.get("/api/health", (_req, res) => { res.json({ ok: true, ai: siteKeyConfigured() }); });
+app.get("/api/health", (_req, res) => { res.json({ ok: true, ai: siteKeyConfigured(), version: process.env.APP_VERSION || "dev" }); });
 
 app.use("/api", auth);
 
@@ -532,6 +532,35 @@ app.post("/api/adventures/:id/act", wrap(async (req) => {
   requireMemberOf(req, game.getAdventure(req.params.id).campaignId);
   const adv = await game.act(req.user, req.params.id, req.body?.characterId, req.body?.action);
   return { view: game.view(adv, req.user.id) };
+}));
+
+// ---- server management: version and in-game updates (via the updater container)
+const STARTED_AT = Date.now();
+const APP_VERSION = process.env.APP_VERSION || "dev";
+const UPDATER_URL = process.env.UPDATER_URL || "";
+const UPDATER_SECRET = process.env.UPDATER_SECRET || "";
+async function updater<T>(method: "GET" | "POST", p: string): Promise<T> {
+  if (!UPDATER_URL || UPDATER_SECRET.length < 16) throw new HttpError(503, "In-game updates aren't set up yet. Run ./scripts/update.sh once on the server to enable them.");
+  let res: globalThis.Response;
+  try { res = await fetch(`${UPDATER_URL}${p}`, { method, headers: { "x-updater-secret": UPDATER_SECRET }, signal: AbortSignal.timeout(60_000) }); }
+  catch { throw new HttpError(503, "The updater container isn't reachable. Run ./scripts/update.sh once on the server to start it."); }
+  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new HttpError(res.status === 409 ? 409 : 502, body.error ?? `Updater error (${res.status})`);
+  return body;
+}
+app.get("/api/admin/server", wrap(async (req) => {
+  requireAdmin(req);
+  const base = { version: APP_VERSION, startedAt: STARTED_AT, node: process.version, campaigns: store.campaigns.size, users: store.users.size, adventures: store.adventures.size };
+  try { return { ...base, updater: { ok: true, ...(await updater<Record<string, unknown>>("GET", "/status")) } }; }
+  catch (e) { return { ...base, updater: { ok: false, error: (e as Error).message } }; }
+}));
+app.post("/api/admin/server/update", wrap(async (req) => {
+  requireAdmin(req);
+  const st = await updater<{ job?: { running?: boolean } }>("GET", "/status");
+  if (st.job?.running) throw new HttpError(409, "An update is already running.");
+  const backup = path.basename(store.backup(path.join(DATA_DIR, "backups"), BACKUP_KEEP + 1));
+  await updater("POST", "/update");
+  return { ok: true, message: `Backed up (${backup}) and started the update. The game will restart in a few minutes.` };
 }));
 
 const BACKUP_KEEP = Number(process.env.BACKUP_KEEP ?? 14);
