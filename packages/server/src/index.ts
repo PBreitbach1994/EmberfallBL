@@ -5,7 +5,9 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { NewAdventureRequest, ServerMessage, AdventureView } from "@tavern/engine";
+import type { NewAdventureRequest, ServerMessage, AdventureView, ClassId } from "@tavern/engine";
+import { CLASSES } from "@tavern/engine";
+import { BUILDINGS, SCENARIOS } from "@tavern/engine/content";
 import { Store, newId, newToken, type UserRecord } from "./store.js";
 import { Game, HttpError, LEGACY_CAMPAIGN_ID } from "./game.js";
 import { Town } from "./town.js";
@@ -242,6 +244,75 @@ app.post("/api/campaign/ai-key", wrap(async (req) => {
   c.ai.keyHint = key.slice(-4);
   store.saveCampaign(c);
   return manageView(store, c);
+}));
+
+/** Campaign editor: change the state of a campaign (owner or site admin). Every change is chronicled. */
+app.post("/api/campaign/edit", wrap((req) => {
+  const c = requireManage(req);
+  const b = req.body ?? {};
+  const notes: string[] = [];
+  const num = (v: unknown, lo: number, hi: number) => { const n = Math.round(Number(v)); if (!Number.isFinite(n)) throw new HttpError(400, "Numbers only."); return Math.max(lo, Math.min(hi, n)); };
+  if (b.scenario) {
+    const { id, state } = b.scenario as { id: string; state: string };
+    if (!SCENARIOS[id]) throw new HttpError(400, "Unknown scenario.");
+    const drop = (arr: string[]) => arr.filter((x) => x !== id);
+    if (state === "locked") { c.unlockedScenarios = drop(c.unlockedScenarios); c.completedScenarios = drop(c.completedScenarios); }
+    else if (state === "available") { if (!c.unlockedScenarios.includes(id)) c.unlockedScenarios.push(id); c.completedScenarios = drop(c.completedScenarios); c.failedScenarios = drop(c.failedScenarios); }
+    else if (state === "completed") {
+      if (!c.unlockedScenarios.includes(id)) c.unlockedScenarios.push(id);
+      if (!c.completedScenarios.includes(id)) c.completedScenarios.push(id);
+      for (const u of SCENARIOS[id].rewards.unlocks ?? []) if (!c.unlockedScenarios.includes(u)) c.unlockedScenarios.push(u);
+    } else throw new HttpError(400, "State must be locked, available or completed.");
+    notes.push(`${SCENARIOS[id].name} → ${state}`);
+  }
+  if (b.classId) {
+    const id = String(b.classId) as ClassId;
+    if (!CLASSES[id]) throw new HttpError(400, "Unknown class.");
+    if (b.unlocked) { if (!c.unlockedClasses.includes(id)) c.unlockedClasses.push(id); }
+    else c.unlockedClasses = c.unlockedClasses.filter((x) => x !== id);
+    notes.push(`${CLASSES[id].name} ${b.unlocked ? "unlocked" : "locked"}`);
+  }
+  if (b.building) {
+    const { id, level } = b.building as { id: string; level: number };
+    const def = BUILDINGS[id];
+    if (!def) throw new HttpError(400, "Unknown building.");
+    c.buildings[id] = num(level, 0, def.levels.length);
+    notes.push(`${def.name} → level ${c.buildings[id]}`);
+  }
+  for (const k of ["treasury", "prosperity", "reputation", "week"] as const) if (b[k] !== undefined) { c[k] = num(b[k], k === "week" ? 1 : k === "treasury" ? 0 : -99, 1_000_000); notes.push(`${k} → ${c[k]}`); }
+  if (b.materials) for (const k of ["timber", "iron", "herbs", "relic"] as const) if (b.materials[k] !== undefined) { c.materials[k] = num(b.materials[k], 0, 100_000); notes.push(`${k} → ${c.materials[k]}`); }
+  if (b.season === "summer" || b.season === "winter") { c.season = b.season; notes.push(`season → ${b.season}`); }
+  if (typeof b.addFlag === "string" && b.addFlag.trim()) { const f = b.addFlag.trim().slice(0, 60); if (!c.flags.includes(f)) c.flags.push(f); notes.push(`flag +${f}`); }
+  if (typeof b.removeFlag === "string") { c.flags = c.flags.filter((f) => f !== b.removeFlag); notes.push(`flag −${b.removeFlag}`); }
+  if (typeof b.chronicle === "string" && b.chronicle.trim()) c.chronicle.push({ week: c.week, text: b.chronicle.trim().slice(0, 2000) });
+  if (typeof b.removeChronicle === "number") c.chronicle.splice(Math.max(0, Math.floor(b.removeChronicle)), 1);
+  store.saveCampaign(c);
+  game.broadcastCampaign();
+  return { ok: true, message: notes.length ? `Changed: ${notes.join(", ")}.` : "Saved." };
+}));
+
+/** Start the campaign over (town, story, unlocks, chronicle). Members, owner, join code and AI settings stay. */
+app.post("/api/campaign/reset", wrap((req) => {
+  const c = requireManage(req);
+  if (String(req.body?.confirmName ?? "") !== c.name) throw new HttpError(400, `Type the campaign's name (${c.name}) to confirm.`);
+  for (const a of store.adventures.values()) if (a.campaignId === c.id && (a.status === "exploring" || a.status === "combat")) { a.status = "retreated"; a.encounter = undefined; for (const p of a.party) { const s = store.characters.get(p.characterId); if (s) { s.activeAdventureId = undefined; store.saveCharacter(s); } } store.saveAdventure(a); }
+  const fresh = game.createCampaign(c.name, undefined, c.id);
+  Object.assign(fresh, { ownerUserId: c.ownerUserId, members: c.members, joinCode: c.joinCode, ai: c.ai, settings: c.settings, createdAt: c.createdAt });
+  fresh.chronicle = [{ week: 1, text: "The company's tale begins again. The Broken Lantern's doors open on a new chapter." }];
+  store.saveCampaign(fresh);
+  game.broadcastCampaign();
+  return { ok: true, message: `${c.name} has been reset to week 1.` };
+}));
+
+/** Delete a campaign. Heroes, Embers and adventures' history stay with their players. */
+app.post("/api/campaign/delete", wrap((req) => {
+  const c = requireManage(req);
+  if (String(req.body?.confirmName ?? "") !== c.name) throw new HttpError(400, `Type the campaign's name (${c.name}) to confirm.`);
+  if (c.id === LEGACY_CAMPAIGN_ID && store.campaigns.size === 1) throw new HttpError(400, "That's the only campaign on the server.");
+  for (const a of store.adventures.values()) if (a.campaignId === c.id) { for (const p of a.party) { const s = store.characters.get(p.characterId); if (s && s.activeAdventureId === a.id) { s.activeAdventureId = undefined; store.saveCharacter(s); } } store.deleteAdventure(a.id); }
+  store.deleteCampaign(c.id);
+  game.broadcastCampaign();
+  return { ok: true, message: `${c.name} was deleted.` };
 }));
 
 app.post("/api/campaign/members/:userId/remove", wrap(async (req) => {

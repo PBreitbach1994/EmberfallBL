@@ -316,3 +316,10 @@ li.fallen { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justi
 .update-log { max-height: 320px; overflow: auto; background: rgba(0,0,0,0.45); padding: 10px; border-radius: 8px; font-size: 12px; white-space: pre-wrap; }
 .commits { list-style: none; padding: 0; display: grid; gap: 4px; }
 .notice { border: 1px solid #d9b45a66; border-radius: 10px; padding: 10px 14px; background: rgba(217,180,90,0.08); }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 6px 0; }
+.chip { padding: 4px 8px; border: 1px solid rgba(217,180,90,0.25); border-radius: 8px; }
+.num-field { display: inline-flex; flex-direction: column; gap: 2px; font-size: 0.85em; }
+.num-field input { width: 110px; }
+.danger-title { color: #ff9a8a; }
+button.danger { background: #6b2020; border-color: #a33; color: #ffe0e0; }

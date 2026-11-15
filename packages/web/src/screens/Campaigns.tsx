@@ -1,7 +1,9 @@
 // Multi-campaign screens: the switcher, the welcome page for players with no campaign yet,
 // and the owner's Campaign page (members, invites, join code, AI key and usage).
 import { useCallback, useEffect, useState } from "react";
-import type { CampaignManageView, CampaignSummary } from "@tavern/engine";
+import type { CampaignManageView, CampaignSummary, ClassId } from "@tavern/engine";
+import { CLASSES } from "@tavern/engine";
+import { BUILDINGS, SCENARIOS } from "@tavern/engine/content";
 import type { AppCtx } from "../App";
 import { api, attempt, errText, toast } from "../api";
 import { Pill } from "../components/ui";
@@ -143,6 +145,124 @@ export function CampaignPage({ ctx }: { ctx: AppCtx }) {
         </form>
         {!v.ai.ownKeyHint && v.ai.siteKeyConfigured && !v.ai.useSiteKey && <p className="small muted">No key? Ask the site owner — they can lend this campaign the server's key with a monthly cap.</p>}
       </section>
+
+      <CampaignEditor ctx={ctx} />
     </div>
+  );
+}
+
+/** Change a campaign's state: story progress, unlocks, town, calendar, flags and chronicle. */
+function CampaignEditor({ ctx }: { ctx: AppCtx }) {
+  const c = ctx.campaign?.campaign;
+  const [flag, setFlag] = useState("");
+  const [entry, setEntry] = useState("");
+  const [confirmName, setConfirmName] = useState("");
+  if (!c) return null;
+  const edit = async (body: Record<string, unknown>) => {
+    const r = await attempt(() => api<{ message: string }>("/campaign/edit", { body }));
+    if (r) { toast(r.message, "info"); await ctx.refreshCampaign(); }
+  };
+  const danger = async (path: string, what: string) => {
+    if (!confirm(`${what} “${c.name}”? This can't be undone.`)) return;
+    const r = await attempt(() => api<{ message: string }>(path, { body: { confirmName } }));
+    if (r) { toast(r.message, "info"); setConfirmName(""); await ctx.refreshCampaigns(); await ctx.refreshCampaign(); if (path.endsWith("delete")) ctx.go({ name: "tavern" }); }
+  };
+  const stateOf = (id: string) => c.completedScenarios.includes(id) ? "completed" : c.unlockedScenarios.includes(id) ? "available" : "locked";
+  const NumField = ({ label, value, onSave }: { label: string; value: number; onSave: (n: number) => void }) => (
+    <label className="num-field">{label}
+      <input type="number" defaultValue={value} key={value} onBlur={(e) => { const n = Number(e.target.value); if (n !== value) onSave(n); }} />
+    </label>
+  );
+  return (
+    <section className="panel campaign-editor">
+      <h2>Campaign editor</h2>
+      <p className="small muted">Changes apply immediately and everyone in the campaign sees them. Numbers save when you click away from the box.</p>
+
+      <h3>Story</h3>
+      <div className="table-wrap">
+        <table className="table">
+          <thead><tr><th>Scenario</th><th>Arc</th><th>Levels</th><th>State</th></tr></thead>
+          <tbody>
+            {Object.values(SCENARIOS).map((sc) => (
+              <tr key={sc.id}>
+                <td><strong>{sc.name}</strong></td>
+                <td className="small">{sc.arc}</td>
+                <td className="small">{sc.recommendedLevel.join("–")}</td>
+                <td>
+                  <select value={stateOf(sc.id)} onChange={(e) => edit({ scenario: { id: sc.id, state: e.target.value } })}>
+                    <option value="locked">Locked</option>
+                    <option value="available">Available</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Classes</h3>
+      <div className="chip-row">
+        {(Object.keys(CLASSES) as ClassId[]).map((id) => (
+          <label key={id} className="check chip">
+            <input type="checkbox" checked={c.unlockedClasses.includes(id)} onChange={(e) => edit({ classId: id, unlocked: e.target.checked })} /> {CLASSES[id].name}
+          </label>
+        ))}
+      </div>
+
+      <h3>Town</h3>
+      <div className="chip-row">
+        {Object.values(BUILDINGS).map((b) => (
+          <label key={b.id} className="num-field">{b.name}
+            <select value={c.buildings[b.id] ?? 0} onChange={(e) => edit({ building: { id: b.id, level: Number(e.target.value) } })}>
+              {Array.from({ length: b.levels.length + 1 }, (_, i) => <option key={i} value={i}>{i === 0 ? "not built" : `level ${i}`}</option>)}
+            </select>
+          </label>
+        ))}
+      </div>
+      <div className="chip-row">
+        <NumField label="Treasury (gp)" value={c.treasury} onSave={(n) => edit({ treasury: n })} />
+        {(["timber", "iron", "herbs", "relic"] as const).map((m) => <NumField key={m} label={m} value={c.materials[m] ?? 0} onSave={(n) => edit({ materials: { [m]: n } })} />)}
+        <NumField label="Prosperity" value={c.prosperity} onSave={(n) => edit({ prosperity: n })} />
+        <NumField label="Reputation" value={c.reputation} onSave={(n) => edit({ reputation: n })} />
+      </div>
+
+      <h3>Calendar</h3>
+      <div className="chip-row">
+        <NumField label="Week" value={c.week} onSave={(n) => edit({ week: n })} />
+        <label className="num-field">Season
+          <select value={c.season} onChange={(e) => edit({ season: e.target.value })}><option value="summer">Summer</option><option value="winter">Winter</option></select>
+        </label>
+      </div>
+
+      <h3>Story flags</h3>
+      <p className="small muted">Flags remember choices (allied goblins, a spared NPC…) and open or close options in later scenes.</p>
+      <div className="chip-row">
+        {c.flags.length ? c.flags.map((f) => <span key={f} className="pill">{f} <button className="linkbtn" title="Remove" onClick={() => edit({ removeFlag: f })}>✕</button></span>) : <span className="muted small">none yet</span>}
+      </div>
+      <form className="row" onSubmit={(e) => { e.preventDefault(); if (flag.trim()) { edit({ addFlag: flag.trim() }); setFlag(""); } }}>
+        <input value={flag} onChange={(e) => setFlag(e.target.value)} placeholder="goblinAllies" />
+        <button>Add flag</button>
+      </form>
+
+      <h3>Chronicle</h3>
+      <form className="stack" onSubmit={(e) => { e.preventDefault(); if (entry.trim()) { edit({ chronicle: entry.trim() }); setEntry(""); } }}>
+        <textarea value={entry} onChange={(e) => setEntry(e.target.value)} rows={3} placeholder="Write an entry for the campaign's chronicle — news, a recap, a rumour…" />
+        <div><button>Add to chronicle</button></div>
+      </form>
+      <ul className="ledger">
+        {c.chronicle.map((ch, i) => ({ ch, i })).reverse().slice(0, 15).map(({ ch, i }) => (
+          <li key={i}><small className="muted">Week {ch.week}</small> {ch.text.slice(0, 180)}{ch.text.length > 180 ? "…" : ""} <button className="linkbtn" title="Delete entry" onClick={() => { if (confirm("Delete this chronicle entry?")) edit({ removeChronicle: i }); }}>✕</button></li>
+        ))}
+      </ul>
+
+      <h3 className="danger-title">Danger zone</h3>
+      <p className="small muted">Type the campaign's name to unlock. Resetting starts the story and town over (members, join code and AI settings stay). Deleting removes the campaign; players keep their heroes and Embers.</p>
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        <input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} placeholder={c.name} />
+        <button disabled={confirmName !== c.name} onClick={() => danger("/campaign/reset", "Reset")}>Reset campaign</button>
+        <button className="danger" disabled={confirmName !== c.name} onClick={() => danger("/campaign/delete", "Delete")}>Delete campaign</button>
+      </div>
+    </section>
   );
 }

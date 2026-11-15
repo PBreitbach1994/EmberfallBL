@@ -10,7 +10,7 @@
     "sourceMap": false,
     "allowImportingTsExtensions": false,
     "baseUrl": ".",
-    "paths": { "@tavern/engine": ["../engine/src/index.ts"] },
+    "paths": { "@tavern/engine": ["../engine/src/index.ts"], "@tavern/engine/content": ["../engine/src/campaign/content/index.ts"] },
     "types": []
   },
   "include": ["src", "vite.config.ts"]

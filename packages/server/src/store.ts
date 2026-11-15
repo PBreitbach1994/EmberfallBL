@@ -71,6 +71,8 @@ export class Store {
     this.adventures.set(a.id, a);
     this.write("adventure", a.id, a);
   }
+  deleteCampaign(id: string) { this.campaigns.delete(id); this.remove("campaign", id); }
+  deleteAdventure(id: string) { this.adventures.delete(id); this.remove("adventure", id); }
   saveMeta(id: string, v: unknown) { this.meta.set(id, v); this.write("meta", id, v); }
 
   /** Consistent online backup (safe while the game is running), keeping the newest `keep` files. */

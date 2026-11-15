@@ -7,7 +7,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { alias: { "@tavern/engine": path.resolve(here, "../engine/src/index.ts") } },
+  resolve: {
+    alias: [
+      { find: /^@tavern\/engine\/content$/, replacement: path.resolve(here, "../engine/src/campaign/content/index.ts") },
+      { find: /^@tavern\/engine$/, replacement: path.resolve(here, "../engine/src/index.ts") },
+    ],
+  },
   server: {
     proxy: {
       "/api": "http://localhost:3000",
