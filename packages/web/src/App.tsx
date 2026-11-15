@@ -3,6 +3,9 @@ import type { CampaignSummary, CampaignView, CharacterSheet, RewardsView, UserIn
 import { CampaignPage, CampaignSwitcher, Welcome } from "./screens/Campaigns";
 import { DEFAULT_BACKDROP, REWARD_BY_ID } from "@tavern/engine";
 import { Shop } from "./screens/Shop";
+import { Workshop, type ContentRec } from "./screens/Workshop";
+import { GEAR, MONSTERS, type EventCard, type ItemDef, type MonsterDef, type Scenario } from "@tavern/engine";
+import { EVENTS, SCENARIOS } from "@tavern/engine/content";
 import { ApiError, api, attempt, getCampaignId, getStoredUser, getToken, onUnauthorized, setCampaignId, storeAuth, useServerMessages, useToasts } from "./api";
 import { Login } from "./screens/Login";
 import { Tavern } from "./screens/Tavern";
@@ -24,7 +27,8 @@ export type Screen =
   | { name: "admin" }
   | { name: "shop" }
   | { name: "welcome" }
-  | { name: "campaign" };
+  | { name: "campaign" }
+  | { name: "workshop" };
 
 export interface AppCtx {
   user: UserInfo;
@@ -61,7 +65,7 @@ function screenFromHash(): Screen {
     const [n, id] = h.split("/");
     if (n === "adventure" && id) return { name: "adventure", id };
     if (n === "sheet" && id) return { name: "sheet", id };
-    if (n === "characters" || n === "create" || n === "admin" || n === "shop" || n === "welcome" || n === "campaign") return { name: n };
+    if (n === "characters" || n === "create" || n === "admin" || n === "shop" || n === "welcome" || n === "campaign" || n === "workshop") return { name: n };
   } catch { /* ignore */ }
   return { name: "tavern" };
 }
@@ -138,6 +142,19 @@ export function App() {
     try { location.hash = "tavern"; } catch { /* ignore */ }
   }, []);
   useEffect(() => { if (user) refreshCampaign(); }, [campaignId, user, refreshCampaign]);
+  // World Workshop content: put custom monsters/items/events/scenarios into the browser's rule registries
+  const loadContent = useCallback(async () => {
+    const r = await attempt(() => api<{ records: ContentRec[] }>("/content"));
+    if (!r) return;
+    for (const rec of r.records) {
+      const d = { ...rec.data, id: rec.id };
+      if (rec.kind === "monster") MONSTERS[rec.id] = d as unknown as MonsterDef;
+      if (rec.kind === "item") GEAR[rec.id] = d as unknown as ItemDef;
+      if (rec.kind === "event") EVENTS[rec.id] = d as unknown as EventCard;
+      if (rec.kind === "scenario") SCENARIOS[rec.id] = d as unknown as Scenario;
+    }
+  }, []);
+  useEffect(() => { if (user) loadContent(); }, [campaignId, user, loadContent]);
   const refreshCharacters = useCallback(async () => {
     const r = await attempt(() => api<{ characters: CharacterSheet[]; companions: CharacterSheet[]; others?: CharacterSheet[] }>("/characters"));
     if (r) { setCharacters(r.characters); setCompanions(r.companions); setOthers(r.others ?? []); }
@@ -187,6 +204,7 @@ export function App() {
           {nav({ name: "characters" }, "Characters")}
           {nav({ name: "shop" }, "Curio Shop")}
           {(campaign?.role === "owner" || campaign?.role === "site-admin") && nav({ name: "campaign" }, "Campaign")}
+          {(campaign?.role === "owner" || campaign?.role === "site-admin") && nav({ name: "workshop" }, "Workshop")}
           {user.isAdmin && nav({ name: "admin" }, "Admin")}
         </nav>
         <div className="userbox">
@@ -209,6 +227,7 @@ export function App() {
         {screen.name === "adventure" && <Adventure ctx={ctx} id={screen.id} />}
         {screen.name === "admin" && <Admin ctx={ctx} />}
         {screen.name === "shop" && <Shop ctx={ctx} />}
+        {screen.name === "workshop" && <Workshop ctx={ctx} onContentChanged={loadContent} />}
       </main>
       <ToastHost />
     </div>

@@ -12,6 +12,8 @@ import { aiAvailable, chronicle, companionDecide, companionsReact, handlePlayerA
 import { newId, type Store, type UserRecord } from "./store.js";
 import { addMember, currentCampaignId, newJoinCode } from "./campaigns.js";
 import { Rewards } from "./rewards.js";
+import { ContentService } from "./content.js";
+import { setLoreProvider } from "./dm.js";
 import { DEFAULT_DICE, EMBER_RULES } from "@tavern/engine";
 
 /** id of the original single campaign (kept so existing saves carry on) */
@@ -32,7 +34,12 @@ export class Game {
   broadcastCampaign: () => void = () => {};
   rewards: Rewards;
 
+  content: ContentService;
+
   constructor(public store: Store) {
+    // custom World Workshop content must be in the registries before anything reads them
+    this.content = new ContentService(store);
+    setLoreProvider((c) => this.content.lore(c));
     this.rewards = new Rewards(store);
     this.ensureCampaign();
     this.ensureCompanions();
@@ -296,7 +303,9 @@ export class Game {
   }
 
   private drawRoadEvent(c: CampaignState): string | undefined {
-    if (!c.roadDeck.length) c.roadDeck = new Rng().shuffle(Object.values(EVENTS).filter((e) => e.deck === "road").map((e) => e.id));
+    const usable = (id: string) => !!EVENTS[id] && this.content.visibleId(id, c);
+    c.roadDeck = c.roadDeck.filter(usable);
+    if (!c.roadDeck.length) c.roadDeck = new Rng().shuffle(Object.values(EVENTS).filter((e) => e.deck === "road" && usable(e.id)).map((e) => e.id));
     for (let i = 0; i < c.roadDeck.length; i++) {
       const card = EVENTS[c.roadDeck[i]];
       if (card && (!card.season || card.season === c.season)) { c.roadDeck.splice(i, 1); return card.id; }

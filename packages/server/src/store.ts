@@ -6,6 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import type { AdventureState, CampaignState, CharacterSheet } from "@tavern/engine";
 import type { Wallet } from "./rewards.js";
+import type { ContentRecord } from "./content.js";
 
 export interface UserRecord {
   id: string;
@@ -27,7 +28,7 @@ export interface UserRecord {
   wallet?: Wallet;
 }
 
-type Kind = "user" | "character" | "campaign" | "adventure" | "meta";
+type Kind = "user" | "character" | "campaign" | "adventure" | "meta" | "content";
 
 export class Store {
   private db: DatabaseSync;
@@ -36,6 +37,7 @@ export class Store {
   campaigns = new Map<string, CampaignState>();
   adventures = new Map<string, AdventureState>();
   meta = new Map<string, unknown>();
+  contents = new Map<string, ContentRecord>();
 
   constructor(file: string) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -49,6 +51,7 @@ export class Store {
       else if (r.kind === "character") this.characters.set(r.id, v);
       else if (r.kind === "campaign") this.campaigns.set(r.id, v);
       else if (r.kind === "adventure") this.adventures.set(r.id, v);
+      else if (r.kind === "content") this.contents.set(r.id, v);
       else this.meta.set(r.id, v);
     }
   }
@@ -71,6 +74,8 @@ export class Store {
     this.adventures.set(a.id, a);
     this.write("adventure", a.id, a);
   }
+  saveContent(c: ContentRecord) { this.contents.set(c.id, c); this.write("content", c.id, c); }
+  deleteContent(id: string) { this.contents.delete(id); this.remove("content", id); }
   deleteCampaign(id: string) { this.campaigns.delete(id); this.remove("campaign", id); }
   deleteAdventure(id: string) { this.adventures.delete(id); this.remove("adventure", id); }
   saveMeta(id: string, v: unknown) { this.meta.set(id, v); this.write("meta", id, v); }

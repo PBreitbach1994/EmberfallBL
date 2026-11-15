@@ -51,6 +51,8 @@ export class Town {
     if (sv.has("shop:potions")) for (const id of ["antitoxin", "alchemistsFire", "holyWater"]) add(id, "consumable", GEAR[id].description);
     if (sv.has("shop:greaterPotions")) add("potionGreaterHealing", "consumable", GEAR.potionGreaterHealing.description);
     if (sv.has("service:raiseDead")) { add("diamond300", "treasure", GEAR.diamond300.description); add("diamond500", "treasure", GEAR.diamond500.description); }
+    // World Workshop items marked "for sale" in this campaign (or everywhere)
+    for (const r of this.game.content.forCampaign(this.campaign)) if (r.kind === "item" && r.forSale) items.push({ itemId: r.id, name: r.name, price: Number(r.data.cost) || 0, kind: String(r.data.kind ?? "gear"), description: String(r.data.description ?? "") });
     return items;
   }
 
@@ -58,7 +60,7 @@ export class Town {
     const c = this.campaign;
     return {
       campaign: publicCampaign(c),
-      scenarios: Object.values(SCENARIOS).filter((s) => c.unlockedScenarios.includes(s.id) || (s.requires?.scenarios ?? []).some((x) => c.completedScenarios.includes(x))).map((s) => {
+      scenarios: Object.values(SCENARIOS).filter((s) => this.game.content.visibleId(s.id, c) && (c.unlockedScenarios.includes(s.id) || (s.requires?.scenarios ?? []).some((x) => c.completedScenarios.includes(x)))).map((s) => {
         const a = scenarioAvailable(c, s);
         return { id: s.id, name: s.name, hook: s.hook, summary: s.summary, location: s.location, recommendedLevel: s.recommendedLevel, available: a.ok, reason: a.reason, completed: c.completedScenarios.includes(s.id), mapPosition: s.mapPosition, arc: s.arc };
       }),

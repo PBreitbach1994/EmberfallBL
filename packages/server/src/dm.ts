@@ -76,6 +76,9 @@ function sheetLine(s: CharacterSheet, controller: string): string {
   return `- ${s.name} (id ${s.id}): ${SPECIES[s.species].name} ${CLASSES[s.classId].name} ${s.level}, HP ${s.hp}/${s.maxHp}, ${controller}. Skills: ${profs}.${s.personality ? ` Personality: ${s.personality.traits}; ideal ${s.personality.ideal}; bond ${s.personality.bond}; flaw ${s.personality.flaw}.` : ""}${s.aiPersona ? ` Voice: ${s.aiPersona}` : ""}`;
 }
 
+let loreProvider: (c: CampaignState) => string = () => "";
+export function setLoreProvider(fn: (c: CampaignState) => string) { loreProvider = fn; }
+
 function sceneContext(adv: AdventureState, ctx: AdventureContext): string {
   const node = currentNode(adv, ctx);
   const party = adv.party.map((p) => { const s = ctx.characters.get(p.characterId); return s ? sheetLine(s, p.controller.kind === "human" ? "played by a human" : "AI companion") : ""; }).join("\n");
@@ -95,6 +98,8 @@ Options:
 ${opts || "- none (the scene resolves through combat or has ended)"}
 Improvisation caps: max gold ${node.improv?.maxGold ?? 0}, allowed items ${(node.improv?.allowedItems ?? []).join(", ") || "none"}, max DC ${node.improv?.maxDc ?? 20}.
 Campaign flags: ${[...ctx.campaign.flags, ...adv.scenarioFlags].join(", ") || "none"}
+World notes from the campaign owner (true in this campaign; use them when relevant):
+${loreProvider(ctx.campaign) || "- none"}
 
 PARTY
 ${party}
@@ -353,6 +358,16 @@ export async function writeBallad(campaign: CampaignState, facts: Record<string,
   });
   if (msg.stop_reason === "refusal") return "";
   return textOf(msg).slice(0, 1200);
+}
+
+/** World Workshop: draft a piece of content as JSON from a one-line idea, then let the caller validate it. */
+export async function draftContent(campaign: CampaignState, kind: string, idea: string, example: unknown, catalog: string, fixErrors?: { previous: string; errors: string[] }): Promise<string> {
+  const ask = fixErrors
+    ? `Your previous draft had these problems:\n- ${fixErrors.errors.slice(0, 25).join("\n- ")}\n\nPrevious draft:\n${fixErrors.previous.slice(0, 60000)}\n\nReturn the corrected JSON only.`
+    : `Create a new ${kind} for this D&D 5e (2024) campaign from the owner's idea:\n"""${idea.slice(0, 2000)}"""\n\nMatch this example's JSON shape exactly (same field names and types), but write entirely new content. Keep it consistent with the world. Return ONE JSON object only, no commentary, no code fences.\n\nEXAMPLE:\n${JSON.stringify(example, null, 1)}\n\n${catalog}`;
+  const msg = await callClaude(campaign, { effort: "medium", maxTokens: 16000, messages: [{ role: "user", content: ask }] });
+  if (msg.stop_reason === "refusal") throw new Error("The AI declined that idea. Try rephrasing it.");
+  return textOf(msg);
 }
 
 export function logNarration(adv: AdventureState, text: string, nodeId?: string): LogEntry {

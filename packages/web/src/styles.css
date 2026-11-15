@@ -313,3 +313,9 @@ details summary { cursor: pointer; color: var(--ember2); }
 .roster { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 4px; }
 .roster-group h3 { margin: 10px 0 4px; }
 a.button { display: inline-block; text-decoration: none; text-align: center; padding: 10px 16px; border-radius: 8px; }
+
+/* World Workshop */
+.workshop .tabs { flex-wrap: wrap; }
+.json-edit { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82em; width: 100%; white-space: pre; tab-size: 2; }
+.draft-box { border: 1px dashed var(--ember); border-radius: 6px; padding: 0.7em; display: grid; gap: 0.5em; }
+.draft-box textarea { width: 100%; }

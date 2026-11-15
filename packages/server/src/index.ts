@@ -6,7 +6,9 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { NewAdventureRequest, ServerMessage, AdventureView, ClassId } from "@tavern/engine";
-import { CLASSES } from "@tavern/engine";
+import { CLASSES, CONTENT_TEMPLATES, GEAR, MONSTERS, SKILL_ABILITY, type CampaignState } from "@tavern/engine";
+import { nameOf, type ContentRecord } from "./content.js";
+import { aiAvailable, draftContent } from "./dm.js";
 import { BUILDINGS, SCENARIOS } from "@tavern/engine/content";
 import { Store, newId, newToken, type UserRecord } from "./store.js";
 import { Game, HttpError, LEGACY_CAMPAIGN_ID } from "./game.js";
@@ -313,6 +315,99 @@ app.post("/api/campaign/delete", wrap((req) => {
   store.deleteCampaign(c.id);
   game.broadcastCampaign();
   return { ok: true, message: `${c.name} was deleted.` };
+}));
+
+// ---- World Workshop: custom content
+const CONTENT_KINDS = ["monster", "item", "event", "scenario", "lore"] as const;
+type Kind = typeof CONTENT_KINDS[number];
+const asKind = (k: unknown): Kind => { if (!CONTENT_KINDS.includes(k as Kind)) throw new HttpError(400, "Unknown content kind."); return k as Kind; };
+const canEditRecord = (u: UserRecord, r: ContentRecord) => u.isAdmin || (r.scope !== "global" && !!store.campaigns.get(r.scope) && canManage(store.campaigns.get(r.scope)!, u));
+
+app.get("/api/content", wrap((req) => {
+  let c: CampaignState | undefined;
+  try { c = game.campaign(); } catch { c = undefined; }
+  const manager = !!c && canManage(c, req.user);
+  const records = [...store.contents.values()].filter((r) => {
+    if (req.user.isAdmin) return true;                       // the site owner sees everything
+    if (r.scope === "global") return r.enabled;               // shared content, if switched on
+    return !!c && r.scope === c.id && (r.enabled || manager); // this campaign's own (owners also see hidden)
+  });
+  return { records: records.map((r) => ({ ...r, scopeName: r.scope === "global" ? "Everywhere" : store.campaigns.get(r.scope)?.name ?? "?", canEdit: canEditRecord(req.user, r) })), canGlobal: req.user.isAdmin, canCreate: manager || req.user.isAdmin };
+}));
+
+app.post("/api/content/validate", wrap((req) => ({ errors: game.content.validate(asKind(req.body?.kind), req.body?.data) })));
+
+app.post("/api/content", wrap((req) => {
+  const kind = asKind(req.body?.kind);
+  const global = req.body?.scope === "global";
+  if (global && !req.user.isAdmin) throw new HttpError(403, "Only the site owner can add content for every campaign.");
+  const c = global ? undefined : requireManage(req);
+  const errors = game.content.validate(kind, req.body?.data);
+  if (errors.length) throw new HttpError(400, `Fix these first: ${errors.slice(0, 6).join(" · ")}${errors.length > 6 ? ` (+${errors.length - 6} more)` : ""}`);
+  const data = req.body.data as Record<string, unknown>;
+  const name = nameOf(kind, data);
+  const r: ContentRecord = { id: game.content.newId(kind, name), kind, scope: global ? "global" : c!.id, name, data, enabled: true, forSale: kind === "item" ? !!req.body?.forSale : undefined, createdBy: req.user.id, createdAt: Date.now(), updatedAt: Date.now() };
+  store.saveContent(r);
+  game.content.register(r);
+  game.content.placeInCampaigns(r, !!req.body?.startUnlocked);
+  game.broadcastCampaign();
+  return { ok: true, record: r, message: `${name} added to ${global ? "every campaign" : c!.name}.` };
+}));
+
+app.put("/api/content/:id", wrap((req) => {
+  const r = store.contents.get(req.params.id);
+  if (!r) throw new HttpError(404, "Not found.");
+  if (!canEditRecord(req.user, r)) throw new HttpError(403, "You can't edit that.");
+  if (req.body?.data !== undefined) {
+    const errors = game.content.validate(r.kind, req.body.data);
+    if (errors.length) throw new HttpError(400, `Fix these first: ${errors.slice(0, 6).join(" · ")}`);
+    r.data = req.body.data;
+    r.name = nameOf(r.kind, r.data);
+  }
+  if (typeof req.body?.enabled === "boolean") r.enabled = req.body.enabled;
+  if (typeof req.body?.forSale === "boolean" && r.kind === "item") r.forSale = req.body.forSale;
+  r.updatedAt = Date.now();
+  store.saveContent(r);
+  game.content.register(r);
+  if (req.body?.startUnlocked) game.content.placeInCampaigns(r, true);
+  game.broadcastCampaign();
+  return { ok: true, record: r, message: `${r.name} saved${typeof req.body?.enabled === "boolean" ? (r.enabled ? " and enabled" : " and hidden") : ""}.` };
+}));
+
+app.delete("/api/content/:id", wrap((req) => {
+  const r = store.contents.get(req.params.id);
+  if (!r) throw new HttpError(404, "Not found.");
+  if (!canEditRecord(req.user, r)) throw new HttpError(403, "You can't delete that.");
+  const inUse = [...store.adventures.values()].some((a) => (a.status === "exploring" || a.status === "combat") && (a.scenarioId === r.id || a.pendingEvent === r.id || JSON.stringify(a.encounter ?? "").includes(`"${r.id}"`)));
+  if (inUse) throw new HttpError(400, "An adventure in progress is using it. Hide it instead, and delete it once that adventure ends.");
+  store.deleteContent(r.id);
+  game.content.removeFromCampaigns(r);
+  if (r.kind === "lore" || r.kind === "event" || r.kind === "scenario") game.content.unregister(r);
+  game.broadcastCampaign();
+  return { ok: true, message: `${r.name} deleted.` };
+}));
+
+/** Ask the AI DM to draft content from a one-line idea (uses the campaign's AI key). Not saved until you save it. */
+app.post("/api/content/draft", wrap(async (req) => {
+  const kind = asKind(req.body?.kind);
+  const c = requireManage(req);
+  if (!aiAvailable(c)) throw new HttpError(400, "This campaign has no AI configured — add a key on the Campaign page (or write it by hand).");
+  const idea = String(req.body?.idea ?? "").trim();
+  if (idea.length < 5) throw new HttpError(400, "Describe what you want in a sentence.");
+  const monsters = Object.values(MONSTERS).filter((m) => game.content.visibleId(m.id, c)).map((m) => `${m.id} (${m.name}, CR ${m.cr}, ${m.type})`).join("; ");
+  const items = [...Object.keys(GEAR)].filter((id) => game.content.visibleId(id, c)).join(", ");
+  const catalog = `Valid monster ids for encounters: ${monsters}\nValid item ids for item effects: ${items}\nValid skills: ${Object.keys(SKILL_ABILITY).join(", ")}\nMap legend: # wall, . floor, : difficult, ~ water, % cover. Coordinates are [x (column), y (row)], 0-based, and every creature must stand on . or :. Scenario node ids must match their keys.`;
+  const parse = (txt: string) => { const a = txt.indexOf("{"), b = txt.lastIndexOf("}"); if (a < 0 || b < a) return null; try { return JSON.parse(txt.slice(a, b + 1)); } catch { return null; } };
+  let raw = await draftContent(c, kind, idea, CONTENT_TEMPLATES[kind], catalog);
+  let data = parse(raw);
+  let errors = data ? game.content.validate(kind, data) : ["The draft wasn't valid JSON."];
+  if (errors.length) {
+    raw = await draftContent(c, kind, idea, CONTENT_TEMPLATES[kind], catalog, { previous: raw, errors });
+    const fixed = parse(raw);
+    if (fixed) { data = fixed; errors = game.content.validate(kind, fixed); }
+  }
+  store.saveCampaign(c); // AI usage was recorded on the campaign
+  return { data, errors };
 }));
 
 app.post("/api/campaign/members/:userId/remove", wrap(async (req) => {
