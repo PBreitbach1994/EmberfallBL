@@ -1,13 +1,16 @@
 import { Portrait } from "../components/art/Portrait";
 import { useEffect, useState } from "react";
 import type { CharacterSheet, RosterHero } from "@tavern/engine";
-import { BACKGROUNDS, CLASSES, SPECIES } from "@tavern/engine";
+import { BACKGROUNDS, CLASSES, MAX_REGULARS, SPECIES, hireCost } from "@tavern/engine";
 import type { AppCtx } from "../App";
-import { api, attempt } from "../api";
+import { api, attempt, toast } from "../api";
 import { CLASS_ICON, HpBar, Modal, Pill, XpBar, classLabel, questProgress } from "../components/ui";
 
 export function Characters({ ctx }: { ctx: AppCtx }) {
   const [quick, setQuick] = useState(false);
+  const [hiring, setHiring] = useState(false);
+  const livingRegulars = ctx.companions.filter((c) => c.ownerId === "ai" && !c.dead);
+  const fallenRegulars = ctx.companions.filter((c) => c.ownerId === "ai" && c.dead);
   const active = ctx.characters.filter((c) => !c.retired);
   const retired = ctx.characters.filter((c) => c.retired);
   return (
@@ -33,13 +36,23 @@ export function Characters({ ctx }: { ctx: AppCtx }) {
       )}
       <CompanyRoster ctx={ctx} />
       <section className="panel">
-        <h2>Tavern regulars (AI companions)</h2>
-        <p className="small muted">Anyone can recruit these for an adventure.</p>
-        <div className="cards">
-          {ctx.companions.map((c) => <CharCard key={c.id} c={c} onOpen={() => ctx.go({ name: "sheet", id: c.id })} />)}
+        <div className="row spread">
+          <h2>Tavern regulars (AI companions)</h2>
+          {ctx.campaign && <button className="primary" disabled={livingRegulars.length >= MAX_REGULARS} title={livingRegulars.length >= MAX_REGULARS ? `The tavern holds ${MAX_REGULARS} regulars at most` : ""} onClick={() => setHiring(true)}>📜 Post a hiring notice</button>}
         </div>
+        <p className="small muted">Anyone can recruit these for an adventure. Lost one? Hire a newcomer here, or bring the fallen back at the Temple (Tavern → Emberfall Town).</p>
+        <div className="cards">
+          {[...livingRegulars, ...ctx.companions.filter((c) => c.ownerId !== "ai" && !c.dead)].map((c) => <CharCard key={c.id} c={c} onOpen={() => ctx.go({ name: "sheet", id: c.id })} />)}
+        </div>
+        {fallenRegulars.length > 0 && (
+          <>
+            <h3>Fallen regulars</h3>
+            <div className="cards">{fallenRegulars.map((c) => <CharCard key={c.id} c={c} onOpen={() => ctx.go({ name: "sheet", id: c.id })} />)}</div>
+          </>
+        )}
       </section>
       {quick && <QuickBuild ctx={ctx} onClose={() => setQuick(false)} />}
+      {hiring && <HireRegular ctx={ctx} onClose={() => setHiring(false)} />}
     </div>
   );
 }
@@ -136,5 +149,63 @@ function CompanyRoster({ ctx }: { ctx: AppCtx }) {
         </div>
       ))}
     </section>
+  );
+}
+
+/** Post a notice at the Broken Lantern: a new AI regular signs on, up to the level of your best living hero. */
+function HireRegular({ ctx, onClose }: { ctx: AppCtx; onClose: () => void }) {
+  const unlocked = ctx.campaign?.campaign.unlockedClasses ?? [];
+  const living = ctx.characters.filter((c) => !c.dead && !c.retired);
+  const maxLevel = Math.max(1, ...living.map((c) => c.level));
+  const purse = living.reduce((n, c) => n + c.gold, 0);
+  const fallenLevels = ctx.companions.filter((c) => c.ownerId === "ai" && c.dead).map((c) => c.level);
+  const [classId, setClassId] = useState("");
+  const [species, setSpecies] = useState("");
+  const [background, setBackground] = useState("");
+  const [name, setName] = useState("");
+  const [persona, setPersona] = useState("");
+  const [level, setLevel] = useState(Math.min(maxLevel, Math.max(1, ...fallenLevels.map((l) => l - 1), 1)));
+  const [busy, setBusy] = useState(false);
+  const cost = hireCost(level);
+  const go = async () => {
+    setBusy(true);
+    const r = await attempt(() => api<{ character: CharacterSheet; message: string }>("/regulars/hire", { body: { classId: classId || undefined, species: species || undefined, background: background || undefined, name: name.trim() || undefined, persona: persona.trim() || undefined, level } }));
+    setBusy(false);
+    if (r) { toast(r.message, "info"); await ctx.refreshCharacters(); onClose(); }
+  };
+  return (
+    <Modal title="Post a hiring notice" onClose={onClose}>
+      <p className="small muted">Pin a notice to the Broken Lantern's board and a new regular turns up looking for work. Leave anything on “surprise me” and the tavern decides. They'll be an AI companion anyone in the company can recruit.</p>
+      <label>Class
+        <select value={classId} onChange={(e) => setClassId(e.target.value)}>
+          <option value="">Surprise me</option>
+          {Object.values(CLASSES).filter((c) => unlocked.includes(c.id)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </label>
+      <label>Species
+        <select value={species} onChange={(e) => setSpecies(e.target.value)}>
+          <option value="">Surprise me</option>
+          {Object.values(SPECIES).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </label>
+      <label>Background
+        <select value={background} onChange={(e) => setBackground(e.target.value)}>
+          <option value="">Surprise me</option>
+          {Object.values(BACKGROUNDS).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+      </label>
+      <label>Name (blank for a random one) <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} /></label>
+      <label>Personality for the AI to play (blank to roll one) <textarea value={persona} onChange={(e) => setPersona(e.target.value)} rows={2} maxLength={400} placeholder="e.g. a retired sailor who sings shanties in every fight" /></label>
+      <label className="num-field">Experience
+        <select value={level} onChange={(e) => setLevel(Number(e.target.value))}>
+          {Array.from({ length: maxLevel }, (_, i) => i + 1).map((l) => <option key={l} value={l}>Level {l}{hireCost(l) ? ` — ${hireCost(l)} gp` : " — free"}</option>)}
+        </select>
+      </label>
+      <p className="small muted">Seasoned hands want pay up front (75 gp per level above 1), taken from your heroes' purses ({Math.floor(purse)} gp between them). You can hire up to the level of your best living hero (level {maxLevel}).</p>
+      <div className="row end">
+        <button onClick={onClose}>Cancel</button>
+        <button className="primary" disabled={busy || purse < cost} onClick={go}>{busy ? "Hiring…" : `Hire${cost ? ` · ${cost} gp` : ""}`}</button>
+      </div>
+    </Modal>
   );
 }

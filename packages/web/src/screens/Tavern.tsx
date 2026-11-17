@@ -283,7 +283,9 @@ function TownPanel({ ctx }: { ctx: AppCtx }) {
   const [who, setWho] = useState(mine.find((x) => !x.dead)?.id ?? "");
   const [donation, setDonation] = useState(10);
   const char = mine.find((x) => x.id === who);
-  const dead = mine.filter((x) => x.dead);
+  // your fallen heroes, plus fallen tavern regulars anyone can pay to bring back
+  const dead = [...mine.filter((x) => x.dead), ...ctx.companions.filter((x) => x.dead && x.ownerId === "ai")];
+  const manager = campaign.role === "owner" || campaign.role === "site-admin";
 
   const post = async (path: string, body: unknown) => {
     const r = await attempt(() => api<{ ok: boolean; message?: string }>(path, { body }));
@@ -367,7 +369,7 @@ function TownPanel({ ctx }: { ctx: AppCtx }) {
                   const feather = phoenixAllowed({ hardcore: c.settings.hardcore, difficulty: c.settings.difficulty }, d);
                   return (
                     <li key={d.id} className="fallen">
-                      <span>💀 <strong>{d.name}</strong>{d.epithet ? ` ${d.epithet}` : ""} — {CLASSES[d.classId].name} {d.level}
+                      <span>💀 <strong>{d.name}</strong>{d.ownerId === "ai" && <> <Pill>regular</Pill></>}{d.epithet ? ` ${d.epithet}` : ""} — {CLASSES[d.classId].name} {d.level}
                         {hard ? " · hardcore: cannot return"
                           : d.diedAt ? (left > 0 ? ` · ${Math.ceil(left)} day${Math.ceil(left) === 1 ? "" : "s"} left for Raise Dead` : " · too long for Raise Dead")
                           : ""}
@@ -380,6 +382,7 @@ function TownPanel({ ctx }: { ctx: AppCtx }) {
                           {d.ownerId === ctx.user.id && feather.ok && <button className="primary" onClick={() => ctx.go({ name: "shop" })} title="Use a Phoenix Feather from the Curio Shop">🪶 Phoenix Feather</button>}
                         </span>
                       )}
+                      {d.ownerId === "ai" && manager && <button title="Take them off the roster; their name goes on the Wall of Lanterns" onClick={() => { if (confirm(`Lay ${d.name} to rest? They leave the tavern for good.`)) post(`/regulars/${d.id}/rest`, {}); }}>🕯 Lay to rest</button>}
                     </li>
                   );
                 })}

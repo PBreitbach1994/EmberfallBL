@@ -5,4 +5,5 @@ FROM docker:27.3.1-cli
 RUN apk add --no-cache git nodejs bash \
  && git config --system --add safe.directory '*'
 COPY updater/server.mjs /updater/server.mjs
-CMD ["node", "/updater/server.mjs"]
+# ENTRYPOINT, not CMD: the docker image's entrypoint script would turn "node" into "docker node ..."
+ENTRYPOINT ["node", "/updater/server.mjs"]

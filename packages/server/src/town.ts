@@ -5,10 +5,10 @@ import {
   type CampaignView, type CharacterSheet, type ClassId, type CreateCharacterRequest, type ShopItem, type LevelUpRequest,
 } from "@tavern/engine";
 import { BUILDINGS, PERSONAL_QUESTS, SCENARIOS, WORLD } from "@tavern/engine/content";
-import { scenarioAvailable, EMBER_RULES, RAISE_DEAD_DAYS, daysDead, graveMarks, raiseDeadCost, resurrectionCost, reviveSheet } from "@tavern/engine";
+import { scenarioAvailable, EMBER_RULES, hireCost, MAX_REGULARS, XP_THRESHOLDS, BACKGROUNDS, SPECIES, RAISE_DEAD_DAYS, daysDead, graveMarks, raiseDeadCost, resurrectionCost, reviveSheet } from "@tavern/engine";
 import { HttpError, type Game } from "./game.js";
 import { aiAvailable } from "./dm.js";
-import { publicCampaign, roleIn } from "./campaigns.js";
+import { canManage, publicCampaign, roleIn } from "./campaigns.js";
 import { newId, type UserRecord } from "./store.js";
 import crypto from "node:crypto";
 
@@ -289,6 +289,54 @@ export class Town {
     return s;
   }
 
+  /** Hire a new tavern regular (an AI companion anyone can recruit), up to the level of your best living hero. */
+  hire(user: UserRecord, body: { name?: string; classId?: ClassId; species?: CharacterSheet["species"]; background?: CharacterSheet["background"]; level?: number; persona?: string }) {
+    const c = this.campaign;
+    const all = [...this.store.characters.values()];
+    if (all.filter((x) => x.ownerId === "ai" && !x.dead && !x.retired).length >= MAX_REGULARS) throw bad(`The tavern already has ${MAX_REGULARS} regulars looking for work. Take some of them out first.`);
+    const pick = <T,>(xs: readonly T[]) => xs[crypto.randomInt(xs.length)];
+    const classId = body.classId ?? pick(c.unlockedClasses);
+    if (!c.unlockedClasses.includes(classId)) throw bad(`${CLASSES[classId]?.name ?? classId} hasn't been unlocked in this campaign yet.`);
+    const species = body.species && SPECIES[body.species] ? body.species : pick(Object.keys(SPECIES)) as CharacterSheet["species"];
+    const background = body.background && BACKGROUNDS[body.background] ? body.background : pick(Object.keys(BACKGROUNDS)) as CharacterSheet["background"];
+    const heroes = all.filter((x) => x.ownerId === user.id && !x.dead && !x.retired);
+    const maxLevel = Math.max(1, ...heroes.map((x) => x.level));
+    const level = Math.max(1, Math.min(maxLevel, Math.floor(Number(body.level) || 1)));
+    const cost = hireCost(level);
+    const purse = heroes.reduce((n, p) => n + p.gold, 0);
+    if (purse < cost) throw bad(`A level ${level} regular wants ${cost} gp up front. Your heroes have ${Math.floor(purse)} gp between them.`);
+    let s: CharacterSheet;
+    try { s = quickBuild((body.name?.trim() || randomName()).slice(0, 40), "ai", classId, species, background, newId("chr")); } catch (e) { throw bad((e as Error).message); }
+    const personality = { traits: pick(TRAITS), ideal: pick(IDEALS), bond: pick(BONDS), flaw: pick(FLAWS) };
+    s.personality = personality;
+    s.aiPersona = body.persona?.trim().slice(0, 400) || `${SPECIES[species].name} ${CLASSES[classId].name.toLowerCase()}, new to the Broken Lantern. ${personality.traits}; ${pick(VOICES)}. Believes in ${personality.ideal.toLowerCase()}; ${personality.bond.toLowerCase()}. Flaw: ${personality.flaw.toLowerCase()}.`;
+    s.personalQuest = { questId: this.drawQuests()[0].id, counters: {}, complete: false };
+    if (c.settings.hardcore) s.hardcore = true;
+    if (level > 1) { s.xp = XP_THRESHOLDS[level]; while (canLevelUp(s)) levelUp(s); longRest(s); }
+    let owed = cost;
+    for (const p of heroes) { if (!owed) break; const pay = Math.min(p.gold, owed); p.gold -= pay; owed -= pay; this.store.saveCharacter(p); }
+    this.store.saveCharacter(s);
+    c.chronicle.push({ week: c.week, text: `${s.name}, a ${SPECIES[species].name.toLowerCase()} ${CLASSES[classId].name.toLowerCase()}, signs on at the Broken Lantern as a regular.` });
+    this.store.saveCampaign(c);
+    return { character: s, message: `${s.name} (level ${s.level} ${CLASSES[classId].name}) takes a seat at the bar, ready for work.${cost ? ` Your heroes paid ${cost} gp.` : ""}` };
+  }
+
+  /** Bury a fallen tavern regular: they leave the roster and their name goes on the wall. */
+  layToRest(user: UserRecord, id: string) {
+    const s = this.store.characters.get(id);
+    if (!s || s.ownerId !== "ai") throw new HttpError(404, "No such regular.");
+    if (!s.dead) throw bad(`${s.name} is still alive.`);
+    if (!canManage(this.campaign, user) && !user.isAdmin) throw new HttpError(403, "Only the campaign owner can lay a regular to rest.");
+    const c = this.campaign;
+    s.retired = true;
+    s.activeAdventureId = undefined;
+    c.retired.push({ characterId: s.id, name: `${s.name} (fallen)`, classId: s.classId, week: c.week });
+    c.chronicle.push({ week: c.week, text: `${s.name} is laid to rest behind the Broken Lantern. A lantern burns on the wall in their name.` });
+    this.store.saveCharacter(s);
+    this.store.saveCampaign(c);
+    return { message: `${s.name} is laid to rest. Their lantern hangs on the wall.` };
+  }
+
   retire(user: UserRecord, id: string) {
     const s = this.mine(user, id);
     if (!s.personalQuest?.complete) throw bad(`${s.name} hasn't completed their personal quest yet.`);
@@ -338,6 +386,12 @@ export class Town {
 
 const NAMES = ["Corwin", "Mira", "Tobias", "Sela", "Dagny", "Oren", "Ysolde", "Bram", "Kesh", "Lirael", "Faro", "Tamsin", "Hollis", "Venna", "Garrick", "Ione"];
 const SURNAMES = ["Ashdown", "Reedwater", "Coldbrook", "Thorne", "Vale", "Marsh", "Underhill", "Greaves", "Holloway", "Pike"];
+const TRAITS = ["Loud and warm, first to buy a round", "Quiet, watchful, speaks only when it matters", "Superstitious; knocks on wood constantly", "Cheerfully reckless", "Dry, sardonic, unflappable", "Earnest to a fault", "Restless; can't sit still between jobs", "Gentle giant who apologises too much", "Sharp-tongued haggler", "Endlessly curious about everything"];
+const IDEALS = ["Loyalty", "Glory", "Coin", "Redemption", "Freedom", "Duty", "Knowledge", "Family", "Justice", "Adventure"];
+const BONDS = ["Owes a debt to the tavern keeper", "Is looking for a missing sibling", "Wants to earn enough to buy a farm", "Swore to avenge a fallen friend", "Keeps a journal of every job for their children", "Carries a token from their old company", "Fled a past they won't talk about", "Wants to see their name on the Wall of Lanterns"];
+const FLAWS = ["Can't resist a wager", "Holds a grudge forever", "Too proud to retreat", "Drinks before a fight", "Trusts strangers too easily", "Hoards shiny things", "Panics around the undead", "Brags about deeds they never did"];
+const VOICES = ["speaks in a rolling brogue", "talks fast and laughs at their own jokes", "uses old-fashioned courtly phrases", "mutters prayers under their breath", "calls everyone 'friend'", "answers questions with questions", "hums marching songs"];
+
 function randomName() {
   return `${NAMES[crypto.randomInt(NAMES.length)]} ${SURNAMES[crypto.randomInt(SURNAMES.length)]}`;
 }

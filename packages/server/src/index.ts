@@ -667,6 +667,8 @@ app.post("/api/town/build", townOp((req) => town.build(String(req.body?.building
 app.post("/api/town/buy", townOp((req) => town.buy(req.user, String(req.body?.characterId), String(req.body?.itemId))));
 app.post("/api/town/sell", townOp((req) => town.sell(req.user, String(req.body?.characterId), String(req.body?.itemId))));
 app.post("/api/town/donate", townOp((req) => town.donate(req.user, String(req.body?.characterId), Number(req.body?.amount))));
+app.post("/api/regulars/hire", wrap((req) => { const r = town.hire(req.user, req.body ?? {}); game.broadcastCampaign(); return { ok: true, ...r }; }));
+app.post("/api/regulars/:id/rest", wrap((req) => { const r = town.layToRest(req.user, req.params.id); game.broadcastCampaign(); return { ok: true, ...r }; }));
 app.post("/api/town/raise", townOp((req) => town.raiseDead(req.user, String(req.body?.characterId), req.body?.rite === "resurrect" ? "resurrect" : "raise")));
 app.post("/api/campaign/settings", wrap((req) => {
   const c = requireManage(req);

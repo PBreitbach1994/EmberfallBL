@@ -39,3 +39,8 @@ export function reviveSheet(s: CharacterSheet, opts: { exhaustion: number; fullH
   s.diedAt = undefined;
   s.activeAdventureId = undefined;
 }
+
+/** Hiring a new tavern regular: a level 1 newcomer is free; seasoned hands cost 75 gp per level above 1. */
+export function hireCost(level: number): number { return 75 * Math.max(0, Math.floor(level) - 1); }
+/** Most living regulars the tavern can hold at once. */
+export const MAX_REGULARS = 12;
