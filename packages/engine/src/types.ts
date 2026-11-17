@@ -123,7 +123,7 @@ export type SpellEffect =
   | { kind: "huntersMark" }
   | { kind: "eldritchBlast" }
   | { kind: "hex" }
-  | { kind: "smite"; dice: string; perSlot: string; type: DamageType; rider?: "burning" | "thunderous" }
+  | { kind: "smite"; dice: string; perSlot: string; type: DamageType; rider?: "burning" | "thunderous"; condition?: { condition: Condition; ability: Ability } }
   | { kind: "mockery" }
   | { kind: "noHeal" }
   | { kind: "faerieFire" }
@@ -165,6 +165,12 @@ export interface CharacterSheet {
   fightingStyle?: "defense" | "dueling" | "archery" | "greatWeapon" | "protection";
   weaponMasteries: string[];         // weapon ids
   spellsKnown: string[];             // spell ids (prepared for clerics/wizards)
+  /** wizards: every spell copied into the book (prepared spells are chosen from it) */
+  spellbook?: string[];
+  /** free spell swaps banked (paladin/ranger: 1 after a long rest; bard/sorcerer/warlock: 1 per level) */
+  spellSwaps?: number;
+  /** free cantrip swaps banked (1 per level for every caster) */
+  cantripSwaps?: number;
   cantrips: string[];
   spellSlots: number[];              // index 1..9 = max slots
   spellSlotsUsed: number[];

@@ -1172,7 +1172,7 @@ export function applyCommand(enc: EncounterState, actorId: string, cmd: CombatCo
       let slot = 1;
       if (free) a.resources.paladinsSmite--;
       else {
-        const want = Math.max(1, cmd.slotLevel ?? 1);
+        const want = Math.max(1, sp.level, cmd.slotLevel ?? 1);
         if (!hasSlot(a, want)) return fail(`No spell slots of level ${want}+ remaining.`);
         slot = spendSlot(a, want);
         b.leveledSpellCast = true;
@@ -1180,7 +1180,7 @@ export function applyCommand(enc: EncounterState, actorId: string, cmd: CombatCo
       b.bonusAction = false;
       b.bonusSpellCast = true;
       hitRec.smitten = true;
-      const upcast = Math.max(0, slot - 1);
+      const upcast = Math.max(0, slot - Math.max(1, sp.level));
       let dice = eff.dice;
       const pm = eff.perSlot.match(/^(\d+)d(\d+)$/);
       if (pm && upcast) dice += `+${parseInt(pm[1]) * upcast}d${pm[2]}`;
@@ -1189,6 +1189,10 @@ export function applyCommand(enc: EncounterState, actorId: string, cmd: CombatCo
       const r = roll(rng, dice, { crit: hitRec.crit });
       log.push(entry("combat", `⚡ ${a.name} smites ${t.name} with ${sp.name}${free ? " (Paladin's Smite)" : slot > 1 ? ` (level ${slot})` : ""}: ${r.total} ${eff.type}${hitRec.crit ? " (critical!)" : ""}.`, a.id));
       applyDamage(enc, rng, t, r.total, eff.type, log, { crit: hitRec.crit, sourceId: a.id });
+      if (!t.dead && eff.condition && !makeSave(enc, rng, t, eff.condition.ability, spellDc(a), log, { vsCondition: eff.condition.condition }) && addCondition(t, eff.condition.condition)) {
+        t.effects.push({ id: `smite-${t.id}`, name: sp.name, source: a.id, kind: "heldBySpell", condition: eff.condition.condition, saveAbility: eff.condition.ability, saveDc: spellDc(a), expires: "never" });
+        log.push(entry("combat", `${t.name} is ${eff.condition.condition}!`, a.id));
+      }
       if (!t.dead && eff.rider === "burning") {
         t.effects = t.effects.filter((e) => e.kind !== "burning");
         t.effects.push({ id: `burn-${t.id}`, name: "Burning", source: a.id, kind: "burning", dice: `${1 + upcast}d6`, saveDc: spellDc(a), saveAbility: "con", expires: "never" });
@@ -1674,6 +1678,10 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
         t.effects.push({ id: `ent-${t.id}`, name: "Entangle", source: a.id, kind: "heldBySpell", condition: "restrained", saveAbility: "str", saveDc: spellDc(a), expires: "concentration", concentration: true });
         log.push(entry("combat", `🌿 ${t.name} is restrained by grasping weeds!`, a.id));
       }
+      if (!ok && !t.dead && eff?.kind === "condition" && addCondition(t, eff.condition)) {
+        log.push(entry("combat", `${t.name} is ${eff.condition}!`, t.id));
+        if (eff.endsOnSave && sp.save) t.effects.push({ id: `held-${t.id}`, name: sp.name, source: a.id, kind: "heldBySpell", condition: eff.condition, saveAbility: sp.save.ability, saveDc: spellDc(a), expires: sp.concentration ? "concentration" : "never", concentration: !!sp.concentration });
+      }
       if (!ok && !t.dead && eff?.kind === "pattern" && addCondition(t, "charmed")) {
         addCondition(t, "incapacitated");
         t.effects.push({ id: `hp-${t.id}`, name: "Hypnotic Pattern", source: a.id, kind: "pattern", expires: "concentration", concentration: true });
@@ -1716,6 +1724,7 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
           log.push(entry("combat", `💥 ${t.name} takes ${amt} ${dtype}${!res.hit ? " (Potent Cantrip)" : ""}.`, a.id));
           applyDamage(enc, rng, t, amt, dtype, log, { crit: res.crit, sourceId: a.id, attack: true, melee: sp.attack === "melee" });
           if (res.hit) hexDamage(enc, rng, a, t, res.crit, log);
+          if (sp.id === "vampiricTouch" && amt > 0) heal(a, Math.floor(amt / 2), log, sp.name);
         }
       }
       if (res.hit && !t.dead && eff?.kind === "noHeal") t.effects.push({ id: `ct-${t.id}`, name: "Chilled to the Bone", source: a.id, kind: "noHeal", expires: "startOfSourceTurn" });
@@ -1731,7 +1740,7 @@ function castSpell(enc: EncounterState, rng: Rng, a: Combatant, cmd: Extract<Com
       if (eff?.kind === "condition" && sp.id === "holdPerson" && t.monsterId && !MONSTERS[t.monsterId]?.type.includes("humanoid")) { log.push(entry("combat", `${t.name} is not a humanoid; Hold Person has no effect.`, a.id)); continue; }
       const ok = makeSave(enc, rng, t, sp.save.ability, spellDc(a), log, { vsCondition: eff?.kind === "condition" ? eff.condition : undefined });
       if (sp.damage) {
-        const r = roll(rng, dmgDice(sp.damage.dice));
+        const r = roll(rng, dmgDice(sp.id === "tollTheDead" && t.hp < t.maxHp ? "1d12" : sp.damage.dice));
         let amt = ok ? (sp.save.half || potent ? Math.floor(r.total / 2) : 0) : r.total;
         if (amt > 0) { log.push(entry("combat", `💥 ${t.name} takes ${amt} ${sp.damage.type}.`, a.id)); applyDamage(enc, rng, t, amt, sp.damage.type, log, { sourceId: a.id }); }
       }

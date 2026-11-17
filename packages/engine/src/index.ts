@@ -15,4 +15,5 @@ export * from "./campaign/adventure.js";
 export * from "./api.js";
 export * from "./rewards.js";
 export * from "./rules/death.js";
+export * from "./rules/spellcraft.js";
 export * from "./campaign/validate.js";

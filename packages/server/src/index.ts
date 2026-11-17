@@ -6,7 +6,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { NewAdventureRequest, ServerMessage, AdventureView, ClassId } from "@tavern/engine";
-import { CLASSES, CONTENT_TEMPLATES, GEAR, MONSTERS, SKILL_ABILITY, type CampaignState } from "@tavern/engine";
+import { CLASSES, CONTENT_TEMPLATES, ensureSpellbook, GEAR, MONSTERS, SKILL_ABILITY, type CampaignState } from "@tavern/engine";
 import { nameOf, type ContentRecord } from "./content.js";
 import { aiAvailable, draftContent } from "./dm.js";
 import { BUILDINGS, SCENARIOS } from "@tavern/engine/content";
@@ -642,6 +642,7 @@ app.post("/api/admin/characters/:id/owner", wrap((req) => {
 // ---- characters
 app.get("/api/characters", wrap((req) => {
   const all = [...store.characters.values()];
+  for (const c of all) if (ensureSpellbook(c)) store.saveCharacter(c); // older wizards get a real spellbook
   return {
     characters: all.filter((c) => c.ownerId === req.user.id),
     companions: all.filter((c) => c.ownerId === "ai" && !c.retired),
@@ -653,6 +654,9 @@ app.get("/api/quests/draw", wrap(() => ({ options: town.drawQuests() })));
 app.post("/api/characters/roll", wrap((req) => town.rollScores(req.user)));
 app.post("/api/characters", wrap((req) => ({ character: town.create(req.user, req.body) })));
 app.post("/api/characters/quick", wrap((req) => ({ character: town.quick(req.user, req.body) })));
+app.post("/api/characters/:id/spells/quote", wrap((req) => town.quoteSpells(req.user, req.params.id, req.body ?? {})));
+app.post("/api/characters/:id/spells", wrap((req) => town.prepareSpells(req.user, req.params.id, req.body ?? {})));
+app.post("/api/characters/:id/copy-scroll", wrap((req) => town.copyScroll(req.user, req.params.id, String(req.body?.itemId ?? ""))));
 app.post("/api/characters/:id/levelup", wrap((req) => town.levelUp(req.user, req.params.id, req.body ?? {})));
 app.post("/api/characters/:id/rest", wrap((req) => town.rest(req.user, req.params.id, req.body?.type === "long" ? "long" : "short", Number(req.body?.hitDice ?? 1))));
 app.post("/api/characters/:id/equip", wrap((req) => ({ character: town.equip(req.user, req.params.id, String(req.body?.itemId), !!req.body?.equipped) })));

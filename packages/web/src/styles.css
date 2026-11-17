@@ -319,3 +319,12 @@ a.button { display: inline-block; text-decoration: none; text-align: center; pad
 .json-edit { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82em; width: 100%; white-space: pre; tab-size: 2; }
 .draft-box { border: 1px dashed var(--ember); border-radius: 6px; padding: 0.7em; display: grid; gap: 0.5em; }
 .draft-box textarea { width: 100%; }
+
+/* Spells */
+.spells-panel .spell-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1em; }
+.spells li.dim { opacity: 0.55; }
+.quote { border: 1px solid var(--line, #5a4632); border-radius: 6px; padding: 0.6em; margin: 0.8em 0; }
+.tour-card { position: fixed; right: 16px; bottom: 16px; z-index: 60; width: min(420px, calc(100vw - 32px)); background: var(--panel, #2a1f16); border: 1px solid var(--ember, #d9822b); border-radius: 8px; padding: 0.9em; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
+.tour-card .tour-body { max-height: 45vh; overflow: auto; margin: 0.5em 0; }
+.tour-card .tour-body ul { padding-left: 1.2em; margin: 0.3em 0; }
+.tour-hl { outline: 2px solid var(--ember, #d9822b); outline-offset: 4px; border-radius: 6px; box-shadow: 0 0 18px rgba(217,130,43,0.55); transition: box-shadow 0.3s; }

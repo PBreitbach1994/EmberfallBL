@@ -5,7 +5,7 @@ import {
   type CampaignView, type CharacterSheet, type ClassId, type CreateCharacterRequest, type ShopItem, type LevelUpRequest,
 } from "@tavern/engine";
 import { BUILDINGS, PERSONAL_QUESTS, SCENARIOS, WORLD } from "@tavern/engine/content";
-import { scenarioAvailable, EMBER_RULES, hireCost, MAX_REGULARS, XP_THRESHOLDS, BACKGROUNDS, SPECIES, RAISE_DEAD_DAYS, daysDead, graveMarks, raiseDeadCost, resurrectionCost, reviveSheet } from "@tavern/engine";
+import { scenarioAvailable, EMBER_RULES, hireCost, applyPrepare, copyScroll, ensureSpellbook, planPrepare, scrollId, scrollSpells, type PrepareRequest, MAX_REGULARS, XP_THRESHOLDS, BACKGROUNDS, SPECIES, RAISE_DEAD_DAYS, daysDead, graveMarks, raiseDeadCost, resurrectionCost, reviveSheet } from "@tavern/engine";
 import { HttpError, type Game } from "./game.js";
 import { aiAvailable } from "./dm.js";
 import { canManage, publicCampaign, roleIn } from "./campaigns.js";
@@ -50,6 +50,7 @@ export class Town {
     }
     if (sv.has("shop:potions")) for (const id of ["antitoxin", "alchemistsFire", "holyWater"]) add(id, "consumable", GEAR[id].description);
     if (sv.has("shop:greaterPotions")) add("potionGreaterHealing", "consumable", GEAR.potionGreaterHealing.description);
+    if (sv.has("shop:scrolls")) for (const sp of scrollSpells()) add(scrollId(sp.id), "scroll", GEAR[scrollId(sp.id)].description);
     if (sv.has("service:raiseDead")) { add("diamond300", "treasure", GEAR.diamond300.description); add("diamond500", "treasure", GEAR.diamond500.description); }
     // World Workshop items marked "for sale" in this campaign (or everywhere)
     for (const r of this.game.content.forCampaign(this.campaign)) if (r.kind === "item" && r.forSale) items.push({ itemId: r.id, name: r.name, price: Number(r.data.cost) || 0, kind: String(r.data.kind ?? "gear"), description: String(r.data.description ?? "") });
@@ -287,6 +288,55 @@ export class Town {
     recalcDerived(s);
     this.store.saveCharacter(s);
     return s;
+  }
+
+  /** The class rule that a change breaks, e.g. "Paladins swap one prepared spell after each long rest." */
+  private swapRule(s: CharacterSheet, req: PrepareRequest): string {
+    try { planPrepare(s, { ...req, retrain: false }); return "That's more changes than your free swaps cover."; }
+    catch (e) { return (e as Error).message.replace(/ The Training Yard can retrain more for gold\.$/, "."); }
+  }
+
+  /** Preview a change to a hero's spells: what it costs, or why it isn't allowed. Nothing is saved. */
+  quoteSpells(user: UserRecord, id: string, req: PrepareRequest) {
+    const s = this.mine(user, id);
+    ensureSpellbook(s);
+    try {
+      const plan = planPrepare(s, { ...req, retrain: true });
+      const needsYard = plan.cost > 0;
+      const yard = this.services().includes("service:retrain");
+      return {
+        ok: !needsYard || (yard && s.gold >= plan.cost), cost: plan.cost, changedSpells: plan.changedSpells, changedCantrips: plan.changedCantrips,
+        freeSpellSwapsUsed: plan.spellSwapsUsed, freeCantripSwapsUsed: plan.cantripSwapsUsed,
+        reason: !needsYard ? undefined : !yard ? `${this.swapRule(s, req)} Build the Training Yard in town to retrain spells for gold.` : s.gold < plan.cost ? `Retraining costs ${plan.cost} gp; ${s.name} has ${s.gold} gp.` : undefined,
+      };
+    } catch (e) { return { ok: false, cost: 0, changedSpells: 0, changedCantrips: 0, freeSpellSwapsUsed: 0, freeCantripSwapsUsed: 0, reason: (e as Error).message }; }
+  }
+
+  /** Change a hero's prepared spells and cantrips between adventures. Extra swaps are paid for at the Training Yard. */
+  prepareSpells(user: UserRecord, id: string, req: PrepareRequest) {
+    const s = this.mine(user, id);
+    if (s.dead) throw bad("The dead don't study.");
+    ensureSpellbook(s);
+    let plan;
+    try { plan = planPrepare(s, { ...req, retrain: true }); } catch (e) { throw bad((e as Error).message); }
+    if (plan.cost > 0) {
+      if (!this.services().includes("service:retrain")) throw bad(`${this.swapRule(s, req)} Build the Training Yard in town to retrain spells for gold.`);
+      if (s.gold < plan.cost) throw bad(`Retraining at the Training Yard costs ${plan.cost} gp; ${s.name} has ${s.gold} gp.`);
+      s.gold -= plan.cost;
+    }
+    applyPrepare(s, { ...req, retrain: true });
+    this.store.saveCharacter(s);
+    const what = [plan.changedSpells && `${plan.changedSpells} spell${plan.changedSpells === 1 ? "" : "s"}`, plan.changedCantrips && `${plan.changedCantrips} cantrip${plan.changedCantrips === 1 ? "" : "s"}`].filter(Boolean).join(" and ");
+    return { character: s, message: what ? `${s.name} studies through the night and changes ${what}.${plan.cost ? ` (Training Yard: ${plan.cost} gp)` : ""}` : `${s.name}'s spells are ready.` };
+  }
+
+  /** A wizard copies a spell scroll from their pack into their spellbook. */
+  copyScroll(user: UserRecord, id: string, itemId: string) {
+    const s = this.mine(user, id);
+    let message: string;
+    try { message = copyScroll(s, itemId); } catch (e) { throw bad((e as Error).message); }
+    this.store.saveCharacter(s);
+    return { character: s, message };
   }
 
   /** Hire a new tavern regular (an AI companion anyone can recruit), up to the level of your best living hero. */

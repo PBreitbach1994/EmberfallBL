@@ -303,7 +303,16 @@ export function CharacterCreate({ ctx }: { ctx: AppCtx }) {
         {cls.spellcasting && (
           <section className="panel">
             <h2>7. Spells</h2>
-            <p className="small muted">Leave blank and sensible defaults will be chosen.</p>
+            <p className="small muted">Leave blank and sensible defaults will be chosen. {{
+              cleric: "Clerics can re-prepare any cleric spells between adventures, so nothing here is permanent.",
+              druid: "Druids can re-prepare any druid spells between adventures, so nothing here is permanent.",
+              wizard: "These go into your spellbook along with two more; you prepare from the book and can change them between adventures.",
+              paladin: "Paladins can swap one prepared spell after each long rest.",
+              ranger: "Rangers can swap one prepared spell after each long rest.",
+              bard: "Bards can swap one spell each time they gain a level.",
+              sorcerer: "Sorcerers can swap one spell each time they gain a level.",
+              warlock: "Warlocks can swap one spell each time they gain a level.",
+            }[classId as string] ?? ""} Open “❔ How spells work” on the character sheet for the full walkthrough.</p>
             {nCantrips > 0 && (
               <>
                 <h3>Cantrips ({cantrips.length}/{nCantrips})</h3>

@@ -323,3 +323,9 @@ li.fallen { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justi
 .num-field input { width: 110px; }
 .danger-title { color: #ff9a8a; }
 button.danger { background: #6b2020; border-color: #a33; color: #ffe0e0; }
+.printed .chip.sel, .printed button.chip.sel:not(.primary):not(.linkbtn) { background: #7a3a12; color: #fff6e0; border-color: #4a2410; font-weight: 600; }
+.printed .quote { border-color: #8a6a40; background: rgba(255, 250, 235, 0.5); }
+.printed .quote.error { color: #7a1a0a; }
+.tour-card, .printed .tour-card { color: #f3e6cc; background: linear-gradient(180deg, #2e2116, #1f160f); }
+.tour-card strong, .tour-card em { color: #ffd9a0; }
+.printed .tour-card .muted, .tour-card .muted { color: #c9b28a; }

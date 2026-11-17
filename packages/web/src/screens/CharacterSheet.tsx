@@ -3,12 +3,13 @@ import { useState } from "react";
 import type { Ability, AbilityScores, CharacterSheet } from "@tavern/engine";
 import {
   ABILITIES, ABILITY_NAMES, ARMOR, BACKGROUNDS, CLASSES, FEATS, FULL_CASTER_SLOTS, GEAR, HALF_CASTER_SLOTS, PACT_SLOTS, SKILL_ABILITY, SKILL_NAMES, SPECIES, SPELLS, WEAPONS,
-  armorClass, canLevelUp, fmtMod, itemName, mod, profBonus, resourcesRemaining, saveBonus, skillBonus, spellSaveDc, weaponAttacks,
+  PREP_MODE, chosenSpells, lockedSpells, armorClass, canLevelUp, fmtMod, itemName, mod, profBonus, resourcesRemaining, saveBonus, skillBonus, spellSaveDc, weaponAttacks,
 } from "@tavern/engine";
 import type { Skill } from "@tavern/engine";
 import type { AppCtx } from "../App";
 import { api, attempt, toast } from "../api";
 import { HpBar, Modal, Pill, XpBar, classLabel, humanize } from "../components/ui";
+import { SpellsPanel } from "../components/Spellbook";
 
 export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
   const sheet = [...ctx.characters, ...ctx.companions, ...ctx.others].find((c) => c.id === id);
@@ -112,22 +113,6 @@ export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
                 <strong>{fmtMod(a.toHit)} · {a.damage}{a.damageBonus ? fmtMod(a.damageBonus) : ""} {a.damageType}</strong></li>
             ))}
           </ul>
-          {cls.spellcasting && spellAb && (
-            <>
-              <h2>Spellcasting</h2>
-              <p className="small">Ability {ABILITY_NAMES[spellAb]} · Save DC {spellSaveDc(sheet, spellAb)} · Attack {fmtMod(pb + mod(sheet.abilities[spellAb]))}</p>
-              <div className="row">
-                {sheet.spellSlots.map((n, lvl) => lvl > 0 && n > 0 ? <Pill key={lvl}>L{lvl}: {n - (sheet.spellSlotsUsed[lvl] ?? 0)}/{n}</Pill> : null)}
-              </div>
-            </>
-          )}
-          {(sheet.cantrips.length > 0 || sheet.spellsKnown.length > 0) && (
-            <ul className="spells">
-              {[...sheet.cantrips, ...sheet.spellsKnown].map((s) => SPELLS[s]).filter(Boolean).sort((a, b) => a.level - b.level).map((s) => (
-                <li key={s.id}><strong>{s.name}</strong> <span className="muted small">{s.level === 0 ? "cantrip" : `level ${s.level}`} · {s.castingTime}{s.concentration ? " · conc." : ""}</span><div className="small">{s.description}</div></li>
-              ))}
-            </ul>
-          )}
           <h2>Resources</h2>
           <ul className="kv">
             {Object.entries(res).map(([k, v]) => <li key={k}><span>{humanize(k)}</span><strong>{v}</strong></li>)}
@@ -183,6 +168,8 @@ export function CharacterSheetView({ ctx, id }: { ctx: AppCtx; id: string }) {
         </section>
       </div>
 
+      <SpellsPanel ctx={ctx} sheet={sheet} mine={mine} />
+
       {levelOpen && <LevelUpDialog sheet={sheet} onClose={() => setLevelOpen(false)} onSubmit={async (body) => { const r = await post("/levelup", body); if (r) setLevelOpen(false); }} />}
       {confirm && (
         <Modal title={confirm === "retire" ? "Retire this hero?" : confirm === "prestige" ? "Take Prestige?" : "Delete character?"} onClose={() => setConfirm(null)}>
@@ -218,12 +205,16 @@ function LevelUpDialog({ sheet, onClose, onSubmit }: { sheet: CharacterSheet; on
   const wantsStyle = next === 2 && (sheet.classId === "paladin" || sheet.classId === "ranger");
   const wantsExpertise = next === 2 && sheet.classId === "bard";
   const maxSpellLevel = cls.spellcasting ? (table[next]?.length ?? 1) - 1 : 0;
-  const prepNow = sheet.spellsKnown.filter((s) => SPELLS[s]?.classes.includes(sheet.classId)).length;
+  const wizard = sheet.classId === "wizard";
+  const prepNow = chosenSpells(sheet).length;
   const prepWant = cls.spellcasting?.prepared[next] ?? 0;
-  const newSpellCount = Math.max(0, prepWant - prepNow);
+  // wizards write 2 spells into the book each level; everyone else picks new prepared/known spells
+  const newSpellCount = wizard ? 2 : Math.max(0, prepWant - prepNow);
   const cantNow = sheet.cantrips.filter((s) => SPELLS[s]?.classes.includes(sheet.classId)).length;
   const newCantripCount = Math.max(0, (cls.spellcasting?.cantrips[next] ?? 0) - cantNow);
-  const pool = Object.values(SPELLS).filter((s) => s.classes.includes(sheet.classId) && s.level >= 1 && s.level <= maxSpellLevel && !sheet.spellsKnown.includes(s.id));
+  const pool = Object.values(SPELLS).filter((s) => s.classes.includes(sheet.classId) && s.level >= 1 && s.level <= maxSpellLevel && !(wizard ? sheet.spellbook ?? sheet.spellsKnown : sheet.spellsKnown).includes(s.id) && !lockedSpells(sheet).includes(s.id))
+    .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+  const mode = PREP_MODE[sheet.classId];
   const cpool = Object.values(SPELLS).filter((s) => s.classes.includes(sheet.classId) && s.level === 0 && !sheet.cantrips.includes(s.id));
   const toggle = (list: string[], set: (v: string[]) => void, id: string, max: number) => set(list.includes(id) ? list.filter((x) => x !== id) : list.length < max ? [...list, id] : list);
   const feats = cls.features.filter((f) => f.level === next);
@@ -271,11 +262,12 @@ function LevelUpDialog({ sheet, onClose, onSubmit }: { sheet: CharacterSheet; on
       )}
       {newSpellCount > 0 && (
         <>
-          <h3>New prepared spells ({spells.length}/{newSpellCount}) — up to level {maxSpellLevel}</h3>
-          <p className="small muted">Unchosen picks are filled automatically.</p>
+          <h3>{wizard ? "Write into your spellbook" : mode === "swapOnLevel" ? "New spells known" : "New prepared spells"} ({spells.length}/{newSpellCount}) — up to level {maxSpellLevel}</h3>
+          <p className="small muted">{wizard ? `Your book grows by two spells; you'll prepare ${prepWant} of them at a time (change them any time in town).` : "Unchosen picks are filled automatically."} {mode === "swapOnLevel" ? "You also earn one free spell swap — use ✎ Change spells after levelling." : ""}</p>
           <div className="chips">{pool.map((s) => <button key={s.id} className={`chip ${spells.includes(s.id) ? "sel" : ""}`} title={s.description} onClick={() => toggle(spells, setSpells, s.id, newSpellCount)}>{s.name} <span className="muted">L{s.level}</span></button>)}</div>
         </>
       )}
+      {cls.spellcasting && (cls.spellcasting.cantrips[next] ?? 0) > 0 && <p className="small muted">You can also swap one cantrip for another after levelling (✎ Change spells).</p>}
       <div className="row end">
         <button onClick={onClose}>Cancel</button>
         <button className="primary" onClick={() => onSubmit({

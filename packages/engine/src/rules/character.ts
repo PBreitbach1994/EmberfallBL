@@ -3,8 +3,9 @@ import { BACKGROUNDS, FEATS, SKILL_ABILITY, SPECIES } from "../data/origins.js";
 import { CLASSES, FULL_CASTER_SLOTS, HALF_CASTER_SLOTS, PACT_SLOTS, MAX_LEVEL, RAGE_USES, XP_THRESHOLDS, martialArtsDie } from "../data/classes.js";
 import { ARMOR, WEAPONS } from "../data/equipment.js";
 import { SPELLS } from "../data/spells.js";
+import { chosenSpells, ensureSpellbook, grantSwapsOnLevel, preparablePool, refreshSwapsOnRest } from "./spellcraft.js";
 import { mod, profForLevel, Rng, roll } from "../dice.js";
-import type {
+import type { SpellDef,
   Ability, AbilityScores, AttackOption, BackgroundId, CharacterSheet, ClassId, Combatant, FeatId, Point, Skill, SpeciesId,
 } from "../types.js";
 import { ABILITIES } from "../types.js";
@@ -154,6 +155,7 @@ export function createCharacter(input: CharacterCreationInput, id: string): Char
   };
   recalcDerived(sheet);
   sheet.hp = sheet.maxHp;
+  ensureSpellbook(sheet);
   return sheet;
 }
 
@@ -383,6 +385,11 @@ export function levelForXp(xp: number): number {
   return lvl;
 }
 
+/** Does this spell do something on the battle grid (as opposed to a narrative-only utility spell)? */
+export function isCombatSpell(sp: SpellDef): boolean {
+  return !!(sp.damage || sp.heal || sp.effect || sp.save || sp.attack || sp.targeting.kind !== "self");
+}
+
 export interface LevelUpChoices {
   asi?: Partial<AbilityScores>;
   newSpells?: string[];
@@ -426,15 +433,29 @@ export function levelUp(sheet: CharacterSheet, choices: LevelUpChoices = {}): st
     const maxSpellLevel = sheet.spellSlots.length - 1;
     const wantPrepared = cls.spellcasting.prepared[sheet.level];
     const wantCantrips = cls.spellcasting.cantrips[sheet.level];
-    for (const id of choices.newSpells ?? []) {
-      const sp = classSpells.find((s) => s.id === id && s.level >= 1 && s.level <= maxSpellLevel);
-      if (sp && !sheet.spellsKnown.includes(id)) sheet.spellsKnown.push(id);
+    const wizard = sheet.classId === "wizard";
+    if (wizard) {
+      // wizards write two new spells into their spellbook each level, then prepare from the book
+      ensureSpellbook(sheet, true);
+      let added = 0;
+      for (const id of choices.newSpells ?? []) {
+        const sp = classSpells.find((x) => x.id === id && x.level >= 1 && x.level <= maxSpellLevel);
+        if (sp && added < 2 && !sheet.spellbook!.includes(id)) { sheet.spellbook!.push(id); added++; }
+      }
+      ensureSpellbook(sheet);
+    } else {
+      for (const id of choices.newSpells ?? []) {
+        const sp = classSpells.find((x) => x.id === id && x.level >= 1 && x.level <= maxSpellLevel);
+        if (sp && !sheet.spellsKnown.includes(id) && chosenSpells(sheet).length < wantPrepared) sheet.spellsKnown.push(id);
+      }
     }
-    // auto-fill with the highest-level spells available if the player didn't choose
-    const pool = classSpells.filter((s) => s.level >= 1 && s.level <= maxSpellLevel && !sheet.spellsKnown.includes(s.id)).sort((a, b) => b.level - a.level);
-    while (sheet.spellsKnown.filter((s) => SPELLS[s]?.classes.includes(sheet.classId)).length < wantPrepared && pool.length) sheet.spellsKnown.push(pool.shift()!.id);
+    // auto-fill with the best spells available if the player didn't choose (wizards: from the book, newest first)
+    const fresh = new Set(wizard ? (choices.newSpells ?? []) : []);
+    const pool = preparablePool(sheet).filter((x) => !sheet.spellsKnown.includes(x.id))
+      .sort((a, b) => Number(fresh.has(b.id)) - Number(fresh.has(a.id)) || Number(isCombatSpell(b)) - Number(isCombatSpell(a)) || b.level - a.level);
+    while (chosenSpells(sheet).length < wantPrepared && pool.length) sheet.spellsKnown.push(pool.shift()!.id);
     for (const id of choices.newCantrips ?? []) if (classSpells.some((s) => s.id === id && s.level === 0) && !sheet.cantrips.includes(id)) sheet.cantrips.push(id);
-    const cpool = classSpells.filter((s) => s.level === 0 && !sheet.cantrips.includes(s.id));
+    const cpool = classSpells.filter((s) => s.level === 0 && !sheet.cantrips.includes(s.id)).sort((a, b) => Number(isCombatSpell(b)) - Number(isCombatSpell(a)));
     while (sheet.cantrips.filter((c) => SPELLS[c]?.classes.includes(sheet.classId)).length < wantCantrips && cpool.length) sheet.cantrips.push(cpool.shift()!.id);
     for (const [lvl, ids] of Object.entries(ALWAYS_PREPARED[sheet.classId] ?? {})) {
       if (sheet.level < Number(lvl)) continue;
@@ -446,6 +467,7 @@ export function levelUp(sheet: CharacterSheet, choices: LevelUpChoices = {}): st
       }
     }
   }
+  grantSwapsOnLevel(sheet);
   if (sheet.classId === "rogue" && sheet.level === 2) { /* cunning action */ }
   if (sheet.classId === "wizard" && sheet.level === 2 && !sheet.expertise.length) {
     const s = (["arcana", "history", "investigation"] as Skill[]).find((x) => sheet.skillProficiencies.includes(x));
@@ -482,6 +504,7 @@ export function longRest(sheet: CharacterSheet): void {
   if (sheet.species === "human") sheet.heroicInspiration = true;
   sheet.exhaustion = Math.max(0, sheet.exhaustion - 1);
   sheet.conditions = [];
+  refreshSwapsOnRest(sheet);
 }
 
 export function shortRest(sheet: CharacterSheet, rng: Rng, hitDiceToSpend: number): string[] {
